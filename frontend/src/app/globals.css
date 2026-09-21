@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+:root {
+  --background: #070708;
+  --foreground: #e8e8ea;
+  --surface: #111114;
+  --border: rgba(255, 255, 255, 0.08);
+  --signal-live: #34d399;
+  --signal-major: #f59e0b;
+  --signal-significant: #60a5fa;
+  --signal-notable: #93c5fd;
+  --signal-minor: #71717a;
+  --signal-verified: #34d399;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.intel-shell {
+  width: min(100%, 1680px);
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+@media (min-width: 1024px) {
+  .intel-shell {
+    padding-inline: 2.5rem;
+  }
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--signal-significant) 70%, white);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intel-card {
+    transition: none;
+  }
+
+  .intel-card:hover {
+    transform: none;
+  }
+
+  span.animate-pulse {
+    animation: none;
+  }
+}
+
+.intel-card {
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+
+.intel-card:hover {
+  transform: translateY(-2px);
+}
+
+.intel-card:focus-within {
+  border-color: rgba(255, 255, 255, 0.28);
+}

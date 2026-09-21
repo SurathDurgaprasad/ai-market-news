@@ -1,0 +1,29 @@
+# Python virtual environments (not committed; see backend/requirements.txt)
+.venv/
+venv_312/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# SQLite databases and WAL/SHM files (local dev data, never committed)
+*.db
+*.db-wal
+*.db-shm
+
+# Local validation output
+backend/nvidia_live_report.json
+backend/tests/out.log
+*.log
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

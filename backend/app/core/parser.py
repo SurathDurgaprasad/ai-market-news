@@ -1,0 +1,244 @@
+"""
+RSS/Atom feed parsing.
+
+External feed payloads are untrusted. This module:
+- never raises on malformed XML (returns whatever entries can be salvaged)
+- isolates per-entry failures so one bad item cannot drop the feed
+- sanitizes HTML
+- validates image URLs (http/https only)
+- caps feed size
+- prefers published time, falls back to Atom updated time
+- interprets feedparser struct_time as UTC
+"""
+from typing import Optional, List
+import json
+import re
+import html
+import calendar
+import logging
+from datetime import datetime, timezone
+import feedparser
+
+from app.core.urls import sanitize_http_url
+
+logger = logging.getLogger(__name__)
+
+# Protect the pipeline from pathological feeds (some aggregators dump 1000+ items).
+MAX_FEED_ENTRIES = 100
+
+class ArticleData:
+    def __init__(self, title: str, url: str, content: str, published_at: Optional[datetime] = None, image_url: Optional[str] = None):
+        self.title = title
+        self.url = url
+        self.content = content
+        self.published_at = published_at
+        self.image_url = image_url
+
+def sanitize_html(html_str: str) -> str:
+    if not html_str:
+        return ""
+    cleaned = re.sub(r'<script\b[^>]*>.*?</script>', '', html_str, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r'<style\b[^>]*>.*?</style>', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r'<noscript\b[^>]*>.*?</noscript>', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r'<!--.*?-->', '', cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+    cleaned = html.unescape(cleaned)
+    # Prevent XML breakout in LLM context and fake <system> tags
+    cleaned = cleaned.replace('<', '＜').replace('>', '＞')
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned.strip()
+
+
+def _entry_url(entry) -> str:
+    link = entry.get("link") or ""
+    if isinstance(link, list):
+        for item in link:
+            if isinstance(item, dict) and item.get("href"):
+                rel = item.get("rel")
+                if rel in (None, "", "alternate"):
+                    return item["href"]
+        if link:
+            first = link[0]
+            if isinstance(first, dict):
+                return first.get("href") or ""
+            return str(first)
+        return ""
+    if isinstance(link, dict):
+        return link.get("href") or ""
+    return str(link)
+
+
+def _entry_published(entry) -> Optional[datetime]:
+    """
+    Prefer RSS pubDate (published_parsed). Fall back to Atom updated.
+    feedparser struct_time values are UTC; calendar.timegm preserves that.
+    Invalid/missing dates return None rather than crashing the entry.
+    """
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not parsed:
+        return None
+    try:
+        return datetime.fromtimestamp(calendar.timegm(parsed), tz=timezone.utc)
+    except (OverflowError, ValueError, TypeError, OSError) as exc:
+        logger.debug(f"Invalid feed date {parsed!r}: {exc}")
+        return None
+
+
+def _entry_image(entry, content_raw: str) -> Optional[str]:
+    """
+    Image preference:
+    1. media:content
+    2. media:thumbnail
+    3. enclosure with image/* type
+    4. link rel=enclosure image
+    5. first absolute http(s) <img src> in HTML
+    """
+    candidates = []
+    if entry.get("media_content"):
+        for mc in entry.media_content:
+            if mc.get("url"):
+                candidates.append(mc.get("url"))
+    if entry.get("media_thumbnail"):
+        for th in entry.media_thumbnail:
+            if th.get("url"):
+                candidates.append(th.get("url"))
+    if entry.get("enclosures"):
+        for enc in entry.enclosures:
+            if str(enc.get("type") or "").startswith("image/") and enc.get("href"):
+                candidates.append(enc.get("href"))
+    if entry.get("links"):
+        for link in entry.links:
+            if str(link.get("type") or "").startswith("image/") and link.get("href"):
+                candidates.append(link.get("href"))
+            elif link.get("rel") == "enclosure" and str(link.get("type") or "").startswith("image/"):
+                candidates.append(link.get("href"))
+    if content_raw:
+        for match in re.finditer(
+            r'<img[^>]+src=["\']([^"\']+)["\']',
+            content_raw,
+            re.IGNORECASE,
+        ):
+            candidates.append(match.group(1))
+
+    for raw in candidates:
+        safe = sanitize_http_url(raw, keep_query=True)
+        if safe:
+            return safe
+    return None
+
+
+def parse_rss_feed(payload: str) -> List[ArticleData]:
+    """
+    Parse an RSS or Atom payload into ArticleData records.
+
+    Never raises on malformed XML. Per-entry errors are logged and skipped.
+    Duplicate URLs inside a single feed are dropped (first occurrence wins).
+    """
+    if not payload:
+        return []
+
+    # Strip UTF-8 BOM if present — some feeds include it and confuse parsers.
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8", errors="replace")
+    if payload.startswith("\ufeff"):
+        payload = payload.lstrip("\ufeff")
+
+    try:
+        feed = feedparser.parse(payload)
+    except Exception as exc:
+        logger.error(f"feedparser crashed on payload: {exc}")
+        return []
+
+    articles: List[ArticleData] = []
+    seen_urls: set[str] = set()
+
+    for entry in feed.entries[:MAX_FEED_ENTRIES]:
+        try:
+            title = sanitize_html(entry.get("title") or "")
+            url = sanitize_http_url(_entry_url(entry), keep_query=False)
+            if not title or not url:
+                continue
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            content_raw = ""
+            if entry.get("content") and len(entry.content) > 0:
+                content_raw = entry.content[0].value or ""
+            else:
+                content_raw = entry.get("summary") or entry.get("description") or ""
+
+            content = sanitize_html(content_raw)
+            published = _entry_published(entry)
+            image_url = _entry_image(entry, content_raw)
+
+            articles.append(ArticleData(
+                title=title,
+                url=url,
+                content=content,
+                published_at=published,
+                image_url=image_url,
+            ))
+        except Exception as exc:
+            logger.warning(f"Skipping malformed feed entry: {exc}")
+            continue
+
+    return articles
+
+
+def extract_feed_next_url(payload: str) -> Optional[str]:
+    """
+    Return a sanitized http(s) URL if the feed advertises Atom/RSS pagination.
+
+    Current configured sources publish a recent window (HN 30 items, blogs
+    typically 10–20). With 10–60 minute polling, following page=2 is not
+    required and can pull stale duplicates. We detect and log, we do not follow.
+    """
+    if not payload:
+        return None
+    try:
+        feed = feedparser.parse(payload)
+    except Exception:
+        return None
+    links = []
+    if getattr(feed, "feed", None):
+        links.extend(feed.feed.get("links") or [])
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        if str(link.get("rel") or "").lower() != "next":
+            continue
+        href = link.get("href")
+        safe = sanitize_http_url(href, keep_query=True) if href else ""
+        if safe:
+            return safe
+    return None
+
+def parse_mock_source(payload: str) -> Optional[ArticleData]:
+    """
+    Parses a mock JSON payload (used in existing tests).
+    """
+    try:
+        data = json.loads(payload)
+
+        content = data.get("content", "")
+        title = data.get("title", "")
+
+        title = sanitize_html(title)
+        content = sanitize_html(content)
+        url = sanitize_http_url(data.get("url", ""), keep_query=False)
+        published = data.get("published_at")
+        image_url = sanitize_http_url(data.get("image_url"), keep_query=True) or None
+
+        if published:
+            try:
+                published = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+            except ValueError:
+                published = None
+
+        if not title or not url:
+            return None
+
+        return ArticleData(title=title, url=url, content=content, published_at=published, image_url=image_url)
+    except json.JSONDecodeError:
+        return None
