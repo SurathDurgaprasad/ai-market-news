@@ -1,8 +1,21 @@
 import React from 'react';
-import Link from 'next/link';
 import { API_V1 } from '@/lib/api';
 
-async function getSources() {
+interface AdminSource {
+  id: string;
+  name: string;
+  url: string;
+  tier: string;
+  health_status: string;
+  last_fetch_at: string | null;
+  last_error_info: string | null;
+  last_ingest_summary: string | null;
+  consecutive_failures: number;
+  polling_tier: string | null;
+  enabled: boolean;
+}
+
+async function getSources(): Promise<AdminSource[]> {
   try {
     const res = await fetch(`${API_V1}/sources/`, {
       next: { revalidate: 30 }
@@ -51,7 +64,7 @@ export default async function AdminSourcesPage() {
                   </td>
                 </tr>
               ) : (
-                sources.map((source: any) => (
+                sources.map((source: AdminSource) => (
                   <tr key={source.id} className="hover:bg-white/5 transition-colors">
                     <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-white">{source.name}</td>
                     <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-300">{source.tier}</td>
