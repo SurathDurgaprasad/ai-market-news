@@ -263,15 +263,73 @@ from 367 — the 15 new tests).
   task ("seams should be fully prepared if credentials/SDK verification
   cannot be performed yet"). Do not read the Stubber-based tests passing
   as proof Bedrock actually works end-to-end against real AWS.
-- `NOT VERIFIED`: live OpenAI semantic validation. `OPENAI_API_KEY` is
-  **absent** from this environment — confirmed via presence-only check,
-  value never inspected. The bounded live-semantic-evaluation task
-  (official+news same event, same-model-different-event, Fairwind
-  neighbors, benign-research-not-security-incident, etc.) could not be
-  executed. This is a genuine, reported gap, not a metric quietly
-  omitted — see docs/ENGINEERING_STATUS.md for the explicit "not yet
-  started" callout, and the session's final report to the user asking
-  how to proceed (supply a key, or accept this as a documented gap).
+- `VERIFIED`: live OpenAI semantic validation — completed after the user
+  added `OPENAI_API_KEY` to this machine's Windows User environment (the
+  same registry-hydration mechanism `NVIDIA_API_KEY` already used; the
+  key value was never printed, echoed, or inspected — only a
+  presence/length check was performed, and only against the app's own
+  config resolution, not raw `env`/`Get-ChildItem Env:`). See the
+  "Live OpenAI semantic evaluation" subsection immediately below for the
+  full case-by-case results. Headline: **9/9 passed, zero false merges,
+  ~1-2s latency per call** (vs. NVIDIA's observed ~10 minutes for 2
+  calls) — both Fairwind-neighbor cases that had timed out live against
+  NVIDIA (FW2, FW4) got real, correct (`DIFFERENT_EVENT`, no false merge)
+  answers this time.
+
+#### Live OpenAI semantic evaluation (`backend/tests/test_openai_relationship_eval.py`, 9 tests, all passing)
+
+Deliberately modeled on `test_nvidia_relationship_eval.py`'s structure
+and `_eval()` pattern — reusing that harness's exact case content for the
+cases already validated against NVIDIA, not inventing a new evaluation
+framework. Run with `OPENAI_EVAL=1 LLM_PROVIDER=openai TESTING=0
+TEST_MODE=0`, model `gpt-4o-mini` (`settings.OPENAI_MODEL`'s default).
+
+| Case | Expected | Actual | Verdict | Latency |
+|---|---|---|---|---|
+| A — official blog + news, same event | SAME_EVENT | SAME_EVENT | TP | - |
+| F — same model family, different event | DIFFERENT_EVENT | DIFFERENT_EVENT | TN | 1858ms |
+| E — Fairwind regression itself | DIFFERENT_EVENT | DIFFERENT_EVENT | TN | 1391ms |
+| H — security incident + confirmation | SAME_EVENT | **UPDATE_TO_SAME_EVENT** | FN | 1530ms |
+| FW2 — product integrates model | DIFFERENT_EVENT | DIFFERENT_EVENT | TN | 937ms |
+| FW4 — capability announcement using model | DIFFERENT_EVENT | DIFFERENT_EVENT | TN | 1875ms |
+
+**Aggregate: TP=1 TN=4 FP=0 FN=1 UNAVAILABLE=0.** Zero false merges — the
+one hard assertion the corpus-summary test enforces. The one FN
+(H-security-confirmation) is not a alarming miss: the model labeled a
+patch/confirmation follow-up `UPDATE_TO_SAME_EVENT` rather than
+`SAME_EVENT` — a defensible alternative reading of the SAME_EVENT vs.
+UPDATE_TO_SAME_EVENT boundary (a confirmation *is* arguably a later
+update to the same incident, not identical reporting of it), not a
+semantic error the way a false merge would be. Reported honestly as a
+real result, not smoothed over.
+
+`classify_event()` case (benign vulnerability-trends research,
+IMPORTANCE-RESEARCH-01's exact reproduction content): the **live model
+itself** — not just the deterministic-signal-override fix — correctly
+returned `event_kind="research"`, `security_impact="none"`,
+`importance_score=50`. The fix protects against a model that gets this
+wrong; this confirms OpenAI doesn't need that protection for this
+specific case, though the fix stays in place as defense-in-depth.
+
+`summarize_event()` grounding case: 3 citations returned, **all 3
+independently verified** via the real `verify_citations()` grounding
+check (exact-substring, not a relaxed test-only check) — no fabricated
+quotes detected.
+
+**Real, previously-uncaught test fragility found and fixed while running
+this**: `test_provider_agnostic.py::test_openai_provider_has_no_client_without_a_key`
+started failing on a full-suite run once a real `OPENAI_API_KEY` existed
+in the ambient environment — `OpenAIProvider(api_key=None, ...)` falls
+back to `settings.OPENAI_API_KEY` (intentional: explicit key wins,
+otherwise fall back to configured settings, same pattern as every other
+provider), so the test's "no key → no client" precondition implicitly
+depended on the ambient machine having no key configured, which stopped
+being true the moment live validation needed one. Not a code defect —
+fixed by explicitly clearing `settings.OPENAI_API_KEY` and the env var
+via `monkeypatch` within the test itself, matching the credential-clearing
+pattern already established in `test_llm_env.py::_clear_llm_keys`, so the
+test's precondition no longer depends on what happens to be configured on
+whatever machine runs it.
 
 ### SCHED-OUTAGE-01 — A provider outage was indistinguishable from "no AI events found"
 - **Severity:** High — this is exactly the kind of correctness gap that

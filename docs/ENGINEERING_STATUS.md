@@ -485,15 +485,57 @@ Pipeline behavior identical across all 4 providers at the code level.
 **`NOT VERIFIED`, honestly reported, not worked around**:
 1. A real, successful Bedrock API call — no AWS credentials in this
    sandbox. Explicitly anticipated and permitted by the task.
-2. **Live OpenAI semantic validation** — `OPENAI_API_KEY` is absent from
-   this environment (confirmed via presence-only check; value never
-   inspected). The requested bounded live evaluation (official+news same
-   event, same-model-different-event, Fairwind neighbors, benign-research-
-   not-incident, etc.) could not be executed. This is reported as a gap
-   in the session's final report to the user, with an explicit ask for
-   how to proceed — not silently skipped, and NVIDIA was deliberately
-   NOT substituted for this step despite being available, since doing so
-   without saying so would misrepresent what was actually validated.
 
 Full deterministic suite after this work: **382 passed, 0 failed** (15
 skipped, unchanged) — up from 360.
+
+---
+
+### 2026-09-22 — Session 3 continued: live OpenAI semantic validation completed
+
+The user added `OPENAI_API_KEY` to this machine's Windows User
+environment (the same registry-hydration mechanism `NVIDIA_API_KEY`
+already used). Verified presence only — via the app's own config
+resolution (`settings.OPENAI_API_KEY`), never via `env`/`Get-ChildItem
+Env:`/printing the value — before proceeding, per explicit instruction.
+
+Built `backend/tests/test_openai_relationship_eval.py`, deliberately
+modeled on `test_nvidia_relationship_eval.py`'s structure (same `_eval()`
+shape, same TP/TN/FP/FN scoring, same skip-guard idiom) rather than a new
+framework, reusing that harness's exact case content for A/F/E-fairwind/
+H/FW2/FW4, plus two genuinely new live checks the NVIDIA harness never
+had: a `classify_event()` case and a `summarize_event()` grounding case.
+One deliberate adaptation: `LlmUnavailableError` records a dedicated
+"UNAVAILABLE" verdict and the test `pytest.skip()`s rather than failing —
+per explicit instruction not to treat a timeout as a semantic failure.
+
+**Result: 9/9 passed in 14.41s total** (~1-2s per call). **Zero false
+merges.** Both Fairwind-neighbor cases that had timed out live against
+NVIDIA (FW2, FW4) got real, correct answers this time. One FN
+(H-security-confirmation: expected SAME_EVENT, got
+UPDATE_TO_SAME_EVENT) — reported honestly as a defensible alternative
+reading of that relationship boundary, not smoothed into a pass.
+`classify_event` correctly classified the benign-research case
+(`event_kind="research"`, `security_impact="none"`) without needing the
+IMPORTANCE-RESEARCH-01 deterministic-override protection.
+`summarize_event` returned 3 citations, all 3 independently verified as
+grounded. Full table and detail in `docs/RED_TEAM_REPORT.md`
+PROVIDER-AGNOSTIC-01.
+
+**Real test fragility found and fixed as a byproduct**: running the full
+suite after this (with a real `OPENAI_API_KEY` now permanently present
+on the machine) surfaced one failure —
+`test_openai_provider_has_no_client_without_a_key` — whose "no key → no
+client" precondition had implicitly depended on the ambient environment
+having no OpenAI key configured. Not a code defect (the `api_key or
+settings.OPENAI_API_KEY` fallback is intentional, matching every other
+provider). Fixed with an explicit `monkeypatch` clearing both
+`settings.OPENAI_API_KEY` and the env var inside the test, matching the
+credential-clearing pattern already established elsewhere in the suite
+(`test_llm_env.py::_clear_llm_keys`).
+
+Full deterministic suite after this fix: **382 passed, 0 failed, 24
+skipped** (skip count rose from 15 → 24, fully explained by the 9 new
+`test_openai_relationship_eval.py` tests correctly skipping by default
+without `OPENAI_EVAL=1` — same total pass/fail baseline the prior
+session reported, exactly as expected).

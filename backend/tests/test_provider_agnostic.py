@@ -53,7 +53,23 @@ def test_openai_provider_initializes_with_configuration():
     assert provider.operation_deadline_seconds > 0
 
 
-def test_openai_provider_has_no_client_without_a_key():
+def test_openai_provider_has_no_client_without_a_key(monkeypatch):
+    """
+    OpenAIProvider(api_key=None, ...) falls back to settings.OPENAI_API_KEY
+    (`key = api_key or settings.OPENAI_API_KEY` — intentional: an explicit
+    key always wins, otherwise fall back to configured settings, same
+    pattern as NVIDIAProvider/AnthropicProvider). That fallback means this
+    test's "no key -> no client" precondition depends on the AMBIENT
+    environment/registry having no OPENAI_API_KEY, which stopped being
+    true the moment a real key was added to this machine's Windows User
+    environment for live validation. Explicitly clearing both
+    settings.OPENAI_API_KEY and the env var guarantees this test's own
+    precondition regardless of what's ambiently configured on the machine
+    running it — the same fix class as the credential-clearing pattern
+    already established in test_llm_env.py's _clear_llm_keys().
+    """
+    monkeypatch.setattr("app.core.config.settings.OPENAI_API_KEY", None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     provider = OpenAIProvider(api_key=None, model="gpt-4o-mini")
     assert provider.client is None
     with pytest.raises(LlmUnavailableError):
