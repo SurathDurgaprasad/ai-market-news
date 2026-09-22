@@ -313,6 +313,26 @@ FIXTURES = {
                    "This is not an availability announcement.",
         "published_at": "2026-09-18T12:10:00Z"
     },
+    # DEDUP-CONTRADICTION-01 (docs/RED_TEAM_REPORT.md): near-identical, long,
+    # shared-marker (H200) titles asserting OPPOSITE claims — these must NOT
+    # fast-path merge on title lexical similarity alone, unlike the
+    # conflicting_facts_* pair above (whose titles are dissimilar enough to
+    # never reach the fast path in the first place; this pair specifically
+    # targets it).
+    "h200_on_track": {
+        "title": "NVIDIA CEO Jensen Huang Says H200 Chip Production Is On Track For Full Capacity This Quarter",
+        "url": "https://nvidia.com/h200-on-track",
+        "content": "NVIDIA CEO Jensen Huang said today that H200 chip production is on track to reach "
+                   "full manufacturing capacity by the end of this quarter, according to remarks at an investor call.",
+        "published_at": "2026-09-18T13:00:00Z"
+    },
+    "h200_behind": {
+        "title": "NVIDIA CEO Jensen Huang Says H200 Chip Production Is Behind For Full Capacity This Quarter",
+        "url": "https://nvidia.com/h200-behind",
+        "content": "NVIDIA CEO Jensen Huang said today that H200 chip production is behind schedule and will not "
+                   "reach full manufacturing capacity this quarter, according to remarks at an investor call.",
+        "published_at": "2026-09-18T13:10:00Z"
+    },
 
     # ── Event-relationship evaluation corpus ─────────────────────────────────
     #

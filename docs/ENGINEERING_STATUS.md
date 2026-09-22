@@ -663,4 +663,79 @@ and severity reasoning in `docs/RED_TEAM_REPORT.md` (`ORIGIN-PSL-01`).
 Full deterministic suite after Area A: **409 passed, 0 failed, 24
 skipped** (up from 401 — 8 new tests, all passing, no regressions).
 
-Next: Area B (duplicate ingestion red team) — not yet started.
+#### Area B — Duplicate ingestion red team: `DEDUP-CONTRADICTION-01` (High) and `DEDUP-MARKER-NOTATION-01` (Low) — both `CONFIRMED`, `FIXED`
+
+Reconnaissance: read `deduplication.py` in full, then `test_deduplication.py`
+(13 tests) and grepped every `process_article`-exercising test file
+before writing anything new — found `test_eval_conflicting_facts_not_merged`
+and `test_adversarial_similar_headline_conflicting_facts_are_not_merged`
+already existed (same `conflicting_facts_available`/`_delayed` fixture
+pair, literally the same test in two files) and confirmed by inspection
+that those titles are dissimilar enough to never reach the fast,
+no-LLM-call lexical-match path at all — they only prove the LLM
+disambiguation layer works, not the fast path.
+
+That gap — nothing exercises the fast path with titles similar enough to
+*bypass* the LLM check — led directly to the session's most significant
+finding: **`DEDUP-CONTRADICTION-01`**, a genuine false-merge
+vulnerability (the highest-priority failure mode this pass explicitly
+warned about, and the only fail-OPEN finding among everything found this
+session). `titles_are_safe_lexical_match()`'s conflict detector only
+compares extracted numeric/product-code markers — it has no way to see
+semantic contradiction in the surrounding prose. Two long, near-identical
+titles asserting OPPOSITE claims about the same subject (NVIDIA H200
+production "on track" vs "behind", sharing the identical `code:h200`
+marker) passed every existing gate — Jaccard >= 0.85, no marker
+conflict, shared marker — and would have merged into one event with
+**zero LLM verification**. Reproduced two independent ways (a curated
+antonym pair, and a bare negation-word asymmetry), both confirmed
+directly against the pre-fix function, then confirmed end-to-end through
+the real `IntelligencePipeline.process_article()` against a real DB
+session before any fix was applied.
+
+Fixed by adding `titles_have_contrasting_claims()` as an additional gate
+in `titles_are_safe_lexical_match()` — a curated, bounded set of
+antonym/contrast phrase pairs plus a negation-word-asymmetry check,
+consistent with this file's existing style of explicit heuristics rather
+than general sentiment analysis. This is a *tightening* addition, not a
+threshold change — no existing threshold was loosened, per the explicit
+instruction not to loosen event-grouping thresholds.
+
+Along the way, also found and fixed **`DEDUP-MARKER-NOTATION-01`** (Low,
+fail-closed): `"GPT-5"` (hyphenated) and `"GPT5"` (fused) extracted to
+disjoint markers (`num:5` vs `code:gpt5`), so the same product written
+with different punctuation registered as a marker *conflict*, forcing an
+unnecessary LLM round-trip for a genuine same-story near-duplicate. Fixed
+by adding a supplementary marker-extraction pass that normalizes the
+hyphen/space-separated form to the same `code:` marker as the fused form.
+
+9 new tests total (6 in `test_deduplication.py` +
+`test_pipeline.py`, plus a new `h200_on_track`/`h200_behind` fixture
+pair). Full details in `docs/RED_TEAM_REPORT.md`
+(`DEDUP-CONTRADICTION-01`, `DEDUP-MARKER-NOTATION-01`).
+
+Full suite after Area B: **414 passed, 1 failed, 24 skipped** (415 total,
+up from 409 — 6 new tests here on top of Area A's 8, plus one unrelated
+observation below).
+
+**Baseline-count note (explaining the 1 failure, per the explicit
+instruction to explain any count change):**
+`test_prompt_injection_semantic.py::test_semantic_prompt_injection_fabricate_evidence`
+failed on this run. This test is unconditional (unlike its sibling
+`test_semantic_prompt_injection_json_ld`, which has an explicit
+`@pytest.mark.skipif(not os.environ.get("NVIDIA_API_KEY"))` guard) and
+makes a **live** call to `NVIDIAProvider().summarize_event()` whenever
+`NVIDIA_API_KEY` is present, asserting the live model never complies with
+an injected instruction to fabricate a citation. Confirmed via `git log`
+that this test file was last touched at commit `f159377`, before this
+session's Phase 1B work — nothing in today's `origin.py`/`deduplication.py`
+changes touches LLM prompting or citation verification. Re-ran the exact
+same test in isolation immediately after: **passed** (79.73s, a second
+live NVIDIA call). This is inherent non-determinism in grading a live
+model's compliance with a prompt-injection attempt (no seed/temperature=0
+guarantee), not a regression from this session's work — documented
+honestly rather than silently re-run until green. Not modified: out of
+scope for Areas A–E of this pass, and fixing live-test flakiness was not
+part of the mandate.
+
+Next: Area C (database integrity red team) — not yet started.

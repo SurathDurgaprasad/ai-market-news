@@ -92,6 +92,35 @@ def test_semantic_clustering_different_event_same_entity(db_session):
     assert event2 is not None
     assert event2.id != event1.id
 
+def test_pipeline_contrasting_claims_do_not_fast_path_merge(db_session):
+    """
+    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    DEDUP-CONTRADICTION-01), end-to-end through the real pipeline/DB: two
+    articles reporting OPPOSITE claims about H200 chip production ("on
+    track" vs "behind"), with a long near-identical shared title and the
+    same product-code marker, previously passed every fast-path safety
+    check (Jaccard >= 0.85, no marker conflict, shared marker) and would
+    have been merged into the same event with NO LLM verification at all.
+    Must now be treated as two distinct events.
+    """
+    from app.core.pipeline import IntelligencePipeline
+    from app.core.providers.source import TestSourceProvider
+
+    pipeline = IntelligencePipeline(db_session)
+    provider = TestSourceProvider()
+
+    r1 = provider.fetch("https://nvidia.com", "h200_on_track")
+    source_id = db_session.query(Source).first().id
+    event1 = pipeline.process_article(r1["data"], source_id)
+    assert event1 is not None
+
+    r2 = provider.fetch("https://nvidia.com", "h200_behind")
+    event2 = pipeline.process_article(r2["data"], source_id)
+    assert event2 is not None
+
+    assert event2.id != event1.id
+
+
 def test_pipeline_updated_article_same_url(db_session):
     """
     Test that an article at the same URL but with different content

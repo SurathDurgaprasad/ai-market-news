@@ -5,6 +5,7 @@ from app.core.deduplication import (
     verify_citations,
     titles_suggest_different_events,
     titles_are_safe_lexical_match,
+    titles_have_contrasting_claims,
 )
 
 def test_normalize_url():
@@ -163,4 +164,104 @@ def test_same_model_titles_are_safe_lexical_matches():
     assert titles_are_safe_lexical_match(
         "OpenAI GPT-5 Model Available Now",
         "OpenAI GPT-5 Model Available",
+    )
+
+
+def test_hyphenated_and_fused_product_codes_are_not_a_false_conflict():
+    """
+    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    DEDUP-MARKER-NOTATION-01): extract_event_markers extracted a bare
+    "num:5" marker for the hyphenated "GPT-5" but a "code:gpt5" marker for
+    the fused "GPT5" — disjoint sets for the same product, so two outlets
+    reporting the identical GPT-5 story with different hyphenation
+    registered as a marker CONFLICT. Reproduced directly before fixing:
+    extract_event_markers("GPT-5 released") == {"num:5"} while
+    extract_event_markers("GPT5 released") == {"code:gpt5"}.
+
+    Impact was fail-closed (an unnecessary LLM round-trip for a same-story
+    near-duplicate, not a false merge) but real and previously untested.
+    """
+    assert not titles_suggest_different_events(
+        "GPT-5 released today", "GPT5 released today"
+    )
+    assert titles_are_safe_lexical_match(
+        "OpenAI GPT-5 Model Available Now", "OpenAI GPT5 Model Available Now"
+    )
+    # space-separated form must also normalize the same way
+    assert not titles_suggest_different_events(
+        "GPT 5 released today", "GPT5 released today"
+    )
+
+
+def test_contrasting_claims_prevent_false_fast_path_merge():
+    """
+    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    DEDUP-CONTRADICTION-01): the marker-conflict check only detects
+    DISAGREEING numeric/code markers, not semantic contradiction in the
+    surrounding prose. Two articles making OPPOSITE factual claims about
+    the same product, phrased with a long shared word sequence and only
+    the claim itself differing, passed every existing safety gate
+    (Jaccard >= 0.85, no marker conflict, markers non-empty and
+    intersecting) and would have fast-path merged into the same event
+    with NO LLM verification at all — the most damaging failure mode
+    explicitly flagged for this attack pass. Reproduced directly against
+    the pre-fix function before patching.
+    """
+    t1 = (
+        "NVIDIA CEO Jensen Huang Says H200 Chip Production Is On Track "
+        "For Full Capacity This Quarter"
+    )
+    t2 = (
+        "NVIDIA CEO Jensen Huang Says H200 Chip Production Is Behind "
+        "For Full Capacity This Quarter"
+    )
+    assert titles_have_contrasting_claims(t1, t2)
+    assert titles_are_safe_lexical_match(t1, t2) is False
+
+
+def test_negation_asymmetry_prevents_false_fast_path_merge():
+    """
+    Second, independent reproduction of DEDUP-CONTRADICTION-01: a bare
+    negation word ("not") in only one of two otherwise near-identical,
+    same-product-code titles also bypassed every existing safety gate
+    before this fix.
+    """
+    t1 = (
+        "NVIDIA Says H200 Chip Production Delays Will Not Affect This "
+        "Quarter Enterprise Shipments"
+    )
+    t2 = (
+        "NVIDIA Says H200 Chip Production Delays Will Affect This "
+        "Quarter Enterprise Shipments"
+    )
+    assert titles_have_contrasting_claims(t1, t2)
+    assert titles_are_safe_lexical_match(t1, t2) is False
+
+
+def test_contrasting_claims_check_does_not_flag_agreeing_titles():
+    # Neighboring/contrast case: the new check must not fire on titles
+    # that merely share vocabulary from the same contrast group without
+    # actually disagreeing (both use "confirmed").
+    assert not titles_have_contrasting_claims(
+        "OpenAI confirms GPT-5 pricing update", "OpenAI confirmed GPT-5 pricing update"
+    )
+    assert titles_are_safe_lexical_match(
+        "OpenAI GPT-5 Model Available Now", "OpenAI GPT-5 Model Available"
+    )
+
+
+def test_hyphen_normalization_does_not_weaken_genuine_conflicts():
+    """
+    Neighboring/contrast case for the DEDUP-MARKER-NOTATION-01 fix: the
+    normalization must not make genuinely different products/magnitudes
+    look compatible. Re-asserts the pre-existing conflict cases still
+    hold after widening marker extraction.
+    """
+    assert titles_suggest_different_events("GPT-5 released", "GPT-4 released")
+    assert titles_suggest_different_events(
+        "NVIDIA Announces H200 GPU Availability",
+        "NVIDIA Announces B200 GPU Availability",
+    )
+    assert titles_suggest_different_events(
+        "OpenAI raises $6.6 billion", "OpenAI raises $6.6 million"
     )

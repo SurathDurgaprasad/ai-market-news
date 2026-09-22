@@ -87,6 +87,9 @@ _MONEY_UNIT_NORMALIZE = {
 }
 
 
+_CODE_SEPARATOR_RE = re.compile(r"\b([a-z]{1,4})[-\s](\d+)")
+
+
 def extract_event_markers(title: str) -> set[str]:
     """
     Extract distinctive factual markers from a headline: magnitudes
@@ -105,6 +108,21 @@ def extract_event_markers(title: str) -> set[str]:
 
     for code in _PRODUCT_CODE_RE.findall(t):
         markers.add(f"code:{code.lower().rstrip('.')}")
+
+    # A short letter-prefix code written with a hyphen or space ("GPT-5",
+    # "GPT 5") must extract to the same code marker as the fused spelling
+    # ("GPT5") — otherwise the same product, written with different
+    # punctuation across two outlets, registers as a marker conflict
+    # (disjoint "num:5" vs "code:gpt5") and titles_suggest_different_events
+    # wrongly reports two DIFFERENT events as conflicting. Reproduced
+    # directly before this fix: extract_event_markers("GPT-5 released")
+    # returned {"num:5"} while extract_event_markers("GPT5 released")
+    # returned {"code:gpt5"} — disjoint sets, so the marker-conflict check
+    # flagged them as different events. See docs/RED_TEAM_REPORT.md.
+    # Added alongside the existing markers (not instead of) so the
+    # unseparated form's own extraction (H200, B200, ...) is untouched.
+    for prefix, digits in _CODE_SEPARATOR_RE.findall(t):
+        markers.add(f"code:{prefix}{digits}")
 
     # Remaining standalone numbers (versions, counts) not already in a scale marker
     scaled_amounts = {m.split(":")[1] for m in markers if m.startswith("scale:")}
@@ -133,6 +151,75 @@ def titles_suggest_different_events(title1: str, title2: str) -> bool:
     return True
 
 
+# Curated, bounded antonym/contrast phrase groups — not exhaustive sentiment
+# analysis, just the specific "same subject, opposite claim" pattern that
+# defeats numeric-marker conflict detection: both titles can share the exact
+# same product code/magnitude while asserting opposite facts about it
+# ("H200 production on track" vs "H200 production behind").
+_CONTRAST_GROUPS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"confirms", "confirmed", "confirm", "approves", "approved"}),
+     frozenset({"denies", "denied", "deny", "rejects", "rejected", "blocks", "blocked"})),
+    (frozenset({"passed", "pass", "passes"}),
+     frozenset({"failed", "fails", "failing", "fail"})),
+    (frozenset({"launches", "launched", "launch", "ships", "shipped"}),
+     frozenset({"delays", "delayed", "delay", "postpones", "postponed", "cancels",
+                "cancelled", "canceled", "scraps", "scrapped", "halts", "halted",
+                "pauses", "paused"})),
+    (frozenset({"increases", "increased", "increase", "rises", "rose", "grows", "grew"}),
+     frozenset({"decreases", "decreased", "decrease", "falls", "fell", "drops",
+                "dropped", "declines", "declined"})),
+    (frozenset({"on track", "ahead of schedule", "on schedule"}),
+     frozenset({"behind", "behind schedule", "off track"})),
+    (frozenset({"beats", "beat", "exceeds", "exceeded"}),
+     frozenset({"misses", "missed", "falls short"})),
+    (frozenset({"wins", "won"}), frozenset({"loses", "lost"})),
+    (frozenset({"hires", "hiring", "expands", "expanded"}),
+     frozenset({"layoffs", "fires", "fired", "cuts", "shrinks", "shrank"})),
+    (frozenset({"live", "restored", "back online", "back up"}),
+     frozenset({"down", "outage", "offline"})),
+)
+
+_NEGATION_WORDS_RE = re.compile(
+    r"\b(not|no|never|isn't|isnt|doesn't|doesnt|won't|wont|cannot|can't|cant|n't|denies|denied)\b",
+    re.IGNORECASE,
+)
+
+
+def titles_have_contrasting_claims(title1: str, title2: str) -> bool:
+    """
+    True when two titles assert opposite facts about what is otherwise the
+    same subject — the specific gap numeric/code markers cannot see, since
+    "H200 production on track" and "H200 production behind" share the exact
+    same code marker while contradicting each other. Two independent,
+    directly reproduced signals (docs/RED_TEAM_REPORT.md
+    DEDUP-CONTRADICTION-01):
+
+    - a curated antonym/contrast phrase pair present one-per-title
+    - a negation word ("not", "never", ...) present in only one title,
+      with the rest of the wording otherwise close enough to have already
+      passed the Jaccard threshold
+    """
+    t1 = (title1 or "").lower()
+    t2 = (title2 or "").lower()
+    if not t1 or not t2:
+        return False
+
+    for group_a, group_b in _CONTRAST_GROUPS:
+        a_in_1 = any(term in t1 for term in group_a)
+        b_in_1 = any(term in t1 for term in group_b)
+        a_in_2 = any(term in t2 for term in group_a)
+        b_in_2 = any(term in t2 for term in group_b)
+        if (a_in_1 and b_in_2) or (b_in_1 and a_in_2):
+            return True
+
+    neg1 = bool(_NEGATION_WORDS_RE.search(t1))
+    neg2 = bool(_NEGATION_WORDS_RE.search(t2))
+    if neg1 != neg2:
+        return True
+
+    return False
+
+
 def titles_are_safe_lexical_match(title1: str, title2: str, threshold: float = 0.85) -> bool:
     """
     True only when a Jaccard title match is safe to treat as the same event
@@ -141,6 +228,8 @@ def titles_are_safe_lexical_match(title1: str, title2: str, threshold: float = 0
     Requires:
     - high lexical overlap
     - no conflicting markers (H200 vs B200, $6.6B vs $6.6M)
+    - no contrasting claims about the same subject (approved vs blocked,
+      negation asymmetry) — see titles_have_contrasting_claims
     - at least one shared distinctive marker (model/code/magnitude)
 
     Generic headlines ("OpenAI Announces Update") must not fast-path merge.
@@ -148,6 +237,8 @@ def titles_are_safe_lexical_match(title1: str, title2: str, threshold: float = 0
     if not is_duplicate_title(title1, title2, threshold=threshold):
         return False
     if titles_suggest_different_events(title1, title2):
+        return False
+    if titles_have_contrasting_claims(title1, title2):
         return False
     m1 = extract_event_markers(title1)
     m2 = extract_event_markers(title2)

@@ -18,6 +18,120 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### DEDUP-CONTRADICTION-01 — Two articles making opposite factual claims about the same subject could fast-merge into one event with no LLM check at all
+- **Severity:** High (correctness/trust — the highest-priority failure
+  mode for this attack pass: a **false merge**, explicitly flagged as
+  more damaging than a missed merge. This is a fail-OPEN defect, unlike
+  every other finding from this pass, which were fail-closed)
+- **Area:** Phase 1B, second attack pass, Area B (duplicate ingestion red
+  team) — event-identity / false-merge class
+- **Status:** `CONFIRMED`, `FIXED`
+- **Description:** `titles_are_safe_lexical_match()` — the fast,
+  no-LLM-call path used to decide whether two articles describe the same
+  real-world event — requires high title Jaccard similarity (>=0.85),
+  no conflicting numeric/product-code markers, and at least one shared
+  marker. Its conflict detector (`titles_suggest_different_events`)
+  compares only extracted **magnitudes and product codes**; it has no
+  mechanism to detect semantic/factual contradiction in the surrounding
+  prose. Two long, near-identical titles differing in only the claim
+  itself — while sharing the same product-code marker — pass every
+  existing gate and merge without ever reaching the LLM verification
+  step (`find_semantic_match`/`classify_relationship`) that the rest of
+  the pipeline relies on for semantic disambiguation.
+  **Reproduced directly (two independent variants, both verified against
+  the pre-fix code before any change was made):**
+  1. Antonym/contrast-verb pair, no negation word:
+     `"NVIDIA CEO Jensen Huang Says H200 Chip Production Is On Track For
+     Full Capacity This Quarter"` vs `"...Is Behind For Full Capacity
+     This Quarter"` — Jaccard >= 0.85, both extract the identical
+     `{"code:h200"}` marker, no conflict detected →
+     `titles_are_safe_lexical_match` returned `True` pre-fix. These are
+     opposite claims about the same chip's production status.
+  2. Negation asymmetry: `"NVIDIA Says H200 Chip Production Delays Will
+     Not Affect This Quarter Enterprise Shipments"` vs the same title
+     with `"Will Affect"` — same result pre-fix: fast-merge approved.
+     Proves the gap isn't limited to a curated antonym list; a bare
+     negation flip against otherwise-matching wording defeats the same
+     checks.
+  End-to-end confirmation: reproduced through the real
+  `IntelligencePipeline.process_article()` against a real (file-backed
+  test) DB session using the `h200_on_track`/`h200_behind` fixture pair
+  — before the fix, this is the exact path that would have produced one
+  merged event instead of two.
+  **Explicitly distinguished from existing coverage:** the pre-existing
+  `test_eval_conflicting_facts_not_merged` test (GPT-5
+  available/delayed) validates a *different, deeper* layer — its
+  fixture titles are dissimilar enough that they never reach the fast
+  path at all, so that test only proves the LLM-based
+  `find_semantic_match` layer works. This finding is specifically about
+  titles similar enough to **bypass** that LLM layer entirely, which no
+  existing test exercised.
+- **Fix (`backend/app/core/deduplication.py`):** new
+  `titles_have_contrasting_claims()`, consulted by
+  `titles_are_safe_lexical_match()` alongside the existing marker-conflict
+  check (added as an additional gate, not a threshold change — no
+  existing threshold was loosened or tightened). Two independent,
+  bounded, explicit signals, matching this file's existing style
+  (curated sets, not general sentiment analysis):
+  - `_CONTRAST_GROUPS`: a curated set of antonym/contrast phrase-pairs
+    common in tech/business reporting (confirmed/denied,
+    passed/failed, launched/delayed-cancelled-halted,
+    increased/decreased, on-track/behind, beat/missed, won/lost,
+    hiring/layoffs, live/down). One-per-title presence from opposite
+    groups flags a conflict.
+  - A negation-word regex (`not`, `never`, `n't`, `denies`, ...):
+    asymmetric presence (in exactly one title) flags a conflict.
+  - Explicitly bounded, not exhaustive — documented as a curated
+    heuristic in the same spirit as `_SCALE_RE`/`_PRODUCT_CODE_RE`, not
+    a claim of complete contradiction detection.
+- **Neighboring attack (passes, confirming no new false negatives on
+  agreement):** two titles both containing the word "confirmed" (same
+  contrast group, not opposite groups) do not trigger the new check;
+  the pre-existing legitimate safe-match test cases (`"OpenAI GPT-5
+  Model Available Now"` vs `"...Available"`) still pass.
+- **Regression/attack tests:**
+  `test_contrasting_claims_prevent_false_fast_path_merge`,
+  `test_negation_asymmetry_prevents_false_fast_path_merge`,
+  `test_contrasting_claims_check_does_not_flag_agreeing_titles`
+  (`backend/tests/test_deduplication.py`); end-to-end
+  `test_pipeline_contrasting_claims_do_not_fast_path_merge`
+  (`backend/tests/test_pipeline.py`) with a new fixture pair
+  (`h200_on_track`/`h200_behind` in `backend/tests/fixtures/sources.py`).
+
+### DEDUP-MARKER-NOTATION-01 — Same product written with different punctuation registered as a marker conflict
+- **Severity:** Low (correctness/cost only — fail-closed: causes an
+  unnecessary LLM round-trip for a genuine same-story near-duplicate,
+  never a false merge)
+- **Area:** Phase 1B, second attack pass, Area B (duplicate ingestion red
+  team)
+- **Status:** `CONFIRMED`, `FIXED`
+- **Description:** `extract_event_markers()` extracted a bare `num:5`
+  marker for the hyphenated `"GPT-5"` but a `code:gpt5` marker for the
+  fused `"GPT5"` — disjoint sets for the literal same product mention,
+  because `_PRODUCT_CODE_RE` requires the letter-prefix and digits to be
+  adjacent with no separator. Two outlets reporting the identical GPT-5
+  story with different hyphenation/spacing therefore registered as a
+  marker **conflict** in `titles_suggest_different_events`, forcing an
+  otherwise-safe fast lexical match to fall through to a full LLM call.
+  Reproduced directly: `extract_event_markers("GPT-5 released")` returned
+  `{"num:5"}` while `extract_event_markers("GPT5 released")` returned
+  `{"code:gpt5"}`, before the fix.
+- **Fix (`backend/app/core/deduplication.py`):** added a second,
+  supplementary extraction pass (`_CODE_SEPARATOR_RE`) that also emits
+  the fused-style `code:` marker for a hyphen/space-separated short
+  letter-prefix + digits pattern (e.g. `"GPT-5"` now also contributes
+  `code:gpt5`, in addition to the existing `num:5`), so fused and
+  separated spellings of the same code now share a marker. Added
+  alongside the existing extraction, not replacing it — H200/B200-style
+  already-fused codes are untouched.
+- **Neighboring attacks (all pass, confirming no weakened conflict
+  detection):** `GPT-5` vs `GPT-4` still conflict; `H200` vs `B200` still
+  conflict; `$6.6 billion` vs `$6.6 million` still conflict.
+- **Regression tests:**
+  `test_hyphenated_and_fused_product_codes_are_not_a_false_conflict`,
+  `test_hyphen_normalization_does_not_weaken_genuine_conflicts`
+  (`backend/tests/test_deduplication.py`).
+
 ### ORIGIN-PSL-01 — Provenance evidence silently lost for public-suffix (`.co.uk`-style) publishers and nested JSON-LD publisher objects
 - **Severity:** Medium (correctness/data-quality — both failure modes are
   fail-closed: legitimate provenance evidence is discarded, not falsely
