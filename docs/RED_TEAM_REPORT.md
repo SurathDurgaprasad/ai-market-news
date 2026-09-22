@@ -18,6 +18,143 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### SCHED-OUTAGE-01 — A provider outage was indistinguishable from "no AI events found"
+- **Severity:** High — this is exactly the kind of correctness gap that
+  erodes trust in the product silently: an operator looking at the admin
+  sources page during a real NVIDIA outage would have seen
+  `health_status="healthy"` and concluded the source legitimately had no
+  news that cycle.
+- **Area:** Phase 1A — scheduler/ingestion architecture. Directly
+  verifies invariant 3 from the operating brief: *"A provider outage must
+  be distinguishable from 'no AI events found'."* It was not.
+- **Status:** FIXED (session 2, 2026-09-22)
+- **Description:** `pipeline.py` only caught `LlmUnavailableError`
+  around its three LLM calls (`classify_event`, `summarize_event`,
+  `classify_relationship`). `NVIDIAProvider.classify_event` only raises
+  `LlmUnavailableError` when `self.client` is `None` (no API key
+  configured) — a genuine network/API outage instead propagates as
+  whatever raw exception the tenacity retry ultimately gave up on
+  (`ProviderRequestTimeout`, a connection error, a persistent rate limit,
+  etc.), which `pipeline.py` does not catch. It escapes to
+  `scheduler.py`'s per-article loop, which *does* have a broad
+  `except Exception as art_err` — but that branch just logs, increments
+  `rejected`, and **keeps processing the rest of that source's
+  articles**, one by one, each repeating the same failed call
+  (`llm_blocked` is never set, so the article loop never `break`s). At
+  the end of the cycle, the source is recorded
+  `health_status="healthy"`, `last_fetch_at` updated — identical to a
+  source that was successfully polled and simply had nothing newsworthy.
+- **Reproduction:** `backend/tests/test_scheduler_provider_outage.py` — a
+  fake `LLMProvider` subclass whose `classify_event` always raises a raw
+  `TimeoutError` (not `LlmUnavailableError`), run through a real
+  `scheduler.run_ingestion_cycle()` against a source with several
+  articles. Before the fix: `source.health_status == "healthy"` despite
+  100% failure, and the provider was called once per article (10 calls
+  for 10 articles — a retry-storm risk, invariant 6) instead of aborting
+  after the outage was confirmed.
+- **Root cause, precisely:** a leaky abstraction boundary in two
+  independent layers stacked on top of each other:
+  1. The concrete providers (`NVIDIAProvider` primarily, but
+     `OpenAIProvider`/`AnthropicProvider` had the identical structural
+     gap) didn't guarantee every non-schema failure surfaces as
+     `LlmUnavailableError` — see the `_unavailable_on_any_error` fix
+     below.
+  2. Even after fixing the concrete providers, **`pipeline.py` itself
+     trusted every `LLMProvider` implementation — current and future,
+     including test doubles and any custom provider someone adds later —
+     to honor that contract perfectly**, with no defense at the boundary
+     where it actually calls into `self.llm`. Proven by writing the
+     reproduction test as a direct `LLMProvider` subclass (not
+     `NVIDIAProvider`): fixing only the concrete providers left the
+     reproduction test still failing, because `pipeline.py` had no
+     fallback for a provider that doesn't cooperate.
+- **Fix, both layers:**
+  1. **Provider layer** (`backend/app/core/providers/llm.py`): new
+     `_unavailable_on_any_error` decorator, applied as the outermost
+     decorator on `classify_event`/`summarize_event`/
+     `classify_relationship` for all three real providers. It lets
+     `LlmUnavailableError` through unchanged and converts *any other*
+     exception that escapes (schema/validation errors are already
+     handled internally and never reach this layer) into
+     `LlmUnavailableError`, chaining the original as `__cause__` for
+     diagnosis. This makes the `LLMProvider` contract airtight: a caller
+     only ever sees a normal return value or `LlmUnavailableError`.
+     Applied uniformly to `NVIDIAProvider`, `OpenAIProvider`, and
+     `AnthropicProvider` (which previously had **no retry decorator at
+     all** — also added `@retry` there for consistency, a genuine gap
+     found as a byproduct, not scope creep for its own sake — and
+     `AnthropicProvider.classify_event`/`summarize_event` previously had
+     no schema-error handling either, unlike NVIDIA/OpenAI; added the
+     same try/except-return-None/`RelationshipResult.different()`
+     pattern for consistency).
+  2. **Pipeline layer** (`backend/app/core/pipeline.py`), the actual
+     defense-in-depth fix that makes the reproduction test pass: all
+     three call sites now have a second `except Exception as exc` after
+     the existing `except LlmUnavailableError`, which normalizes to
+     `self.last_outcome = "llm_unavailable"` and re-raises as
+     `LlmUnavailableError` — so it doesn't matter whether the leak is in
+     a built-in provider, a future provider, or a test double; the
+     pipeline no longer trusts the provider to always cooperate.
+- **Why fixing only one layer would have been incomplete:** the
+  provider-layer fix alone (layer 1) makes the shipped, real providers
+  correct, but is a promise, not an enforced contract — nothing stops a
+  future provider implementation (or a bug reintroduced later in an
+  existing one) from leaking a raw exception again, silently
+  reintroducing this exact defect. The pipeline-layer fix (layer 2) is
+  what actually makes the *invariant* hold regardless of provider
+  implementation quality. Both were kept rather than picking one,
+  because they answer different questions: "is NVIDIAProvider correct"
+  vs. "can the ingestion pipeline be trusted regardless of which
+  provider is plugged in."
+- **Regression tests:**
+  `backend/tests/test_scheduler_provider_outage.py` (2 tests) — a
+  persistent-outage source is recorded `health_status != "healthy"` with
+  a non-empty `last_error_info`, and the provider is not called once per
+  remaining article after the outage is already evident (`calls < 10` for
+  a 10-article feed with `_OutageLLMProvider`, run directly against
+  `scheduler.run_ingestion_cycle`, not a unit-level mock).
+- **Full suite after fix:** 360 passed, 0 failed (up from 357 — the 2 new
+  outage tests plus 1 overlap-prevention test below). Fixing this
+  surfaced 3 pre-existing test assertions in
+  `test_nvidia_timeout_bound.py`/`test_provider_timeout_bound_openai_anthropic.py`
+  that expected the raw `ProviderRequestTimeout` to escape
+  `classify_event()` — correctly updated to expect `LlmUnavailableError`
+  with the original exception preserved as `__cause__`, since that raw
+  escape is exactly what this finding fixes.
+- **Neighboring attack, verified rather than assumed:** invariant 5
+  ("overlapping cycles must not create duplicate events") was checked
+  directly against the installed `apscheduler`, not assumed from
+  documentation memory: `BackgroundScheduler()._job_defaults` is
+  `{'misfire_grace_time': 1, 'coalesce': True, 'max_instances': 1}`, and
+  `scheduler.py`'s `add_job()` call never overrides `max_instances` or
+  `coalesce` — so APScheduler itself refuses to start a second
+  `run_ingestion_cycle` while one is still running (skips the trigger,
+  does not queue a concurrent run), and coalesces missed fire times
+  instead of firing them back-to-back. `VERIFIED`. Added
+  `backend/tests/test_scheduler_overlap_prevention.py` (1 test) asserting
+  `job.max_instances == 1` and `job.coalesce is True` directly against a
+  real started scheduler, so a future change to `add_job()` that
+  accidentally raises `max_instances` (e.g. "to make ingestion faster")
+  cannot silently reintroduce concurrent-cycle risk without a test
+  explaining why not.
+- **Neighboring attack, not yet resolved — logged as `OPEN FINDING` (not
+  swept into "fixed"):** invariant 4 ("a slow article must not
+  indefinitely block a cycle") is now *individually* bounded per LLM call
+  (NVDA-01's hard deadline, ~100s x up to 3 tenacity attempts ≈ 300s
+  worst case per call), but there is still no **outer, whole-cycle**
+  wall-clock budget in `scheduler.py::run_ingestion_cycle`. A source with
+  many articles, each legitimately taking close to that per-call ceiling
+  (not an outage — just slow, e.g. a large backlog processed after
+  downtime), could still make one ingestion cycle run for a long time in
+  aggregate, delaying every source scheduled after it in the same cycle's
+  `source_targets` loop. Deliberately not fixed with an arbitrary short
+  cycle timeout per the operating brief's explicit instruction
+  ("Measure first" / "Do NOT merely add arbitrary short timeouts that
+  cause valid ingestion to fail") — this needs real measurement of
+  typical cycle duration under realistic article volume before choosing
+  a number, which this session did not do. Tracked as the next Phase 1A
+  item.
+
 ### NVDA-01 — Live NVIDIA-call test can hang indefinitely, no enforced ceiling
 - **Severity:** Medium (reliability, not a security hole)
 - **Area:** Phase 3 / Phase 15 — LLM provider boundary, failure recovery

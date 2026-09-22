@@ -380,3 +380,52 @@ log/status and re-ran the deterministic suite before continuing, rather
 than assuming prior state was intact. No work was lost either time —
 recorded here as evidence the process held up under real interruption,
 not just as a note.
+
+---
+
+### 2026-09-22 — Session 3: Phase 1A (scheduler/ingestion architecture)
+
+Picked up per explicit instruction to prioritize the intelligence
+pipeline itself over further infrastructure polish. First and highest-value
+finding this session:
+
+#### `SCHED-OUTAGE-01` — `FIXED` (full detail in `docs/RED_TEAM_REPORT.md`)
+Directly verified invariant 3 ("a provider outage must be distinguishable
+from 'no AI events found'") and found it did **not** hold: a persistent
+NVIDIA outage would have been recorded as `health_status="healthy"`,
+identical to a genuinely quiet source. Root cause was a two-layer leak
+(the concrete providers didn't guarantee `LlmUnavailableError` for every
+non-schema failure, and `pipeline.py` only trusted that guarantee rather
+than defending against it). Fixed at both layers — a `_unavailable_on_any_error`
+decorator applied uniformly to all three real providers (also giving
+`AnthropicProvider` retry and schema-error handling it never had), and a
+second `except Exception` at each of `pipeline.py`'s three LLM call sites
+that doesn't depend on any provider behaving correctly. Reproduced with a
+hand-rolled `LLMProvider` subclass (not a built-in provider) specifically
+so the fix couldn't be validated against only the providers it happened
+to touch — this is why the pipeline-layer fix was necessary even after
+the provider-layer fix alone made the test pass for real providers but
+not for a badly-behaved one.
+
+#### Invariant 5 (overlapping cycles) — `VERIFIED`
+Checked directly against the installed `apscheduler`
+(`BackgroundScheduler()._job_defaults`), not assumed:
+`max_instances=1`, `coalesce=True`, and `scheduler.py` never overrides
+either. APScheduler itself refuses concurrent `run_ingestion_cycle` runs.
+Added a regression test asserting this directly against a real started
+scheduler so a future `add_job()` change can't silently regress it.
+
+#### Invariant 4 (whole-cycle wall-clock budget) — `OPEN FINDING`, deliberately not fixed yet
+Per-call timeouts exist (NVDA-01) but there is still no outer ceiling on
+`run_ingestion_cycle` as a whole. Not fixed this session because the
+operating brief explicitly requires measuring real cycle duration under
+realistic article volume before choosing a number — an arbitrary short
+cycle timeout risks failing valid ingestion. Queued as the next Phase 1A
+item, to be done with actual measurement, not a guess.
+
+Full deterministic suite after this session's work: **360 passed, 0
+failed** (13 skipped, unchanged) — up from 357. 4 new test files
+(`test_scheduler_provider_outage.py`,
+`test_scheduler_overlap_prevention.py`, plus fixes to 3 pre-existing
+assertions in the timeout-bound test files that correctly needed to
+change to match the improved provider contract, not weakenings).

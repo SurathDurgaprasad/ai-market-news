@@ -60,6 +60,49 @@ def call_with_hard_deadline(fn, *args, deadline_seconds: float, **kwargs):
             f"Provider HTTP call exceeded hard deadline of {deadline_seconds}s"
         ) from exc
 
+
+def _unavailable_on_any_error(fn):
+    """
+    Keep the LLMProvider contract airtight: every real classify_event /
+    summarize_event / classify_relationship call either returns normally
+    or raises LlmUnavailableError — nothing else is allowed to escape to
+    the caller.
+
+    Without this, a provider-level outage (tenacity's retries genuinely
+    exhausted on a timeout/connection/rate-limit error, or any other
+    unexpected exception) propagates as whatever raw exception type the
+    SDK/transport happened to raise. pipeline.py only catches
+    LlmUnavailableError around these calls — anything else falls through
+    to scheduler.py's generic per-article `except Exception`, which logs
+    it as an ordinary rejected article and keeps going, article after
+    article, for the rest of that source's feed. The source ends the
+    cycle recorded health_status="healthy" (llm_blocked never gets set),
+    indistinguishable from a source that was successfully polled and
+    simply had nothing newsworthy. See docs/RED_TEAM_REPORT.md
+    SCHED-OUTAGE-01 for the reproduction that found this.
+
+    Schema/validation problems are NOT covered by this — those are
+    already handled inside each provider's own try/except, which returns
+    None (a legitimate "couldn't classify this specific content", not
+    "the provider is down"). Only what actually escapes past that is
+    reclassified here.
+    """
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        except LlmUnavailableError:
+            raise
+        except Exception as exc:
+            raise LlmUnavailableError(
+                f"{type(self).__name__}.{fn.__name__} failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    return wrapper
+
+
 LLM_TEST = "test"
 LLM_PRODUCTION = "production"
 LLM_UNAVAILABLE = "unavailable"
@@ -479,7 +522,13 @@ class OpenAIProvider(LLMProvider):
         )
         return parse_structured(completion.choices[0].message.content or "", model_cls)
 
-    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
+    @_unavailable_on_any_error
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(nvidia_error_is_retryable),
+        reraise=True,
+    )
     def classify_event(self, content: str) -> Optional[EventClassification]:
         logger.info("Classifying event via OpenAI model=%s", self.model)
         try:
@@ -490,7 +539,13 @@ class OpenAIProvider(LLMProvider):
             logger.warning("OpenAI classify_event produced invalid schema; dropping classification")
             return None
 
-    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
+    @_unavailable_on_any_error
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(nvidia_error_is_retryable),
+        reraise=True,
+    )
     def summarize_event(self, content: str) -> Optional[SourceGroundedSummary]:
         logger.info("Summarizing event via OpenAI model=%s", self.model)
         try:
@@ -501,7 +556,13 @@ class OpenAIProvider(LLMProvider):
             logger.warning("OpenAI summarize_event produced invalid schema")
             return None
 
-    @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3), reraise=True)
+    @_unavailable_on_any_error
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(nvidia_error_is_retryable),
+        reraise=True,
+    )
     def classify_relationship(
         self,
         content: str,
@@ -632,6 +693,7 @@ class NVIDIAProvider(LLMProvider):
             raise last_parse_error
         raise ValueError("NVIDIA returned no parseable JSON object")
 
+    @_unavailable_on_any_error
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -650,6 +712,7 @@ class NVIDIAProvider(LLMProvider):
             logger.warning("NVIDIA classify_event produced invalid schema; dropping classification")
             return None
 
+    @_unavailable_on_any_error
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -668,6 +731,7 @@ class NVIDIAProvider(LLMProvider):
             logger.warning("NVIDIA summarize_event produced invalid schema")
             return None
 
+    @_unavailable_on_any_error
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -744,26 +808,66 @@ class AnthropicProvider(LLMProvider):
         text = "".join(getattr(block, "text", "") for block in msg.content)
         return parse_structured(text, model_cls)
 
+    @_unavailable_on_any_error
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(nvidia_error_is_retryable),
+        reraise=True,
+    )
     def classify_event(self, content: str) -> Optional[EventClassification]:
-        return self._complete_json(CLASSIFY_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", EventClassification)
+        logger.info("Classifying event via Anthropic model=%s", self.model)
+        try:
+            return self._complete_json(
+                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", EventClassification
+            )
+        except (ValidationError, ValueError, json.JSONDecodeError):
+            logger.warning("Anthropic classify_event produced invalid schema; dropping classification")
+            return None
 
+    @_unavailable_on_any_error
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(nvidia_error_is_retryable),
+        reraise=True,
+    )
     def summarize_event(self, content: str) -> Optional[SourceGroundedSummary]:
-        return self._complete_json(SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", SourceGroundedSummary)
+        logger.info("Summarizing event via Anthropic model=%s", self.model)
+        try:
+            return self._complete_json(
+                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", SourceGroundedSummary
+            )
+        except (ValidationError, ValueError, json.JSONDecodeError):
+            logger.warning("Anthropic summarize_event produced invalid schema")
+            return None
 
+    @_unavailable_on_any_error
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(nvidia_error_is_retryable),
+        reraise=True,
+    )
     def classify_relationship(
         self,
         content: str,
         event_summary: str,
         context: Optional[str] = None,
     ) -> RelationshipResult:
+        logger.info("Classifying relationship via Anthropic model=%s", self.model)
         context_block = f"\n{context}" if context else ""
-        raw = self._complete_json(
-            RELATIONSHIP_SYSTEM_PROMPT,
-            f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
-            RelationshipResult,
-        )
-        rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT
-        return RelationshipResult(relationship=rel, reasoning=raw.reasoning)
+        try:
+            raw = self._complete_json(
+                RELATIONSHIP_SYSTEM_PROMPT,
+                f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
+                RelationshipResult,
+            )
+            rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT
+            return RelationshipResult(relationship=rel, reasoning=raw.reasoning)
+        except (ValidationError, ValueError, json.JSONDecodeError):
+            logger.warning("Anthropic classify_relationship unparseable; treating as different events")
+            return RelationshipResult.different()
 
     def is_same_event(self, content: str, event_summary: str, context: Optional[str] = None) -> bool:
         return self.classify_relationship(content, event_summary, context).is_merge()

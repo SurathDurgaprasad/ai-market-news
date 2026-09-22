@@ -37,6 +37,7 @@ import pytest
 from app.core.providers.llm import (
     NVIDIAProvider,
     ProviderRequestTimeout,
+    LlmUnavailableError,
     nvidia_error_is_retryable,
 )
 
@@ -150,12 +151,19 @@ def test_classify_event_raises_bounded_error_not_unbounded_hang():
     )
 
     start = time.monotonic()
-    # classify_event catches parse/validation errors and returns None;
-    # a ProviderRequestTimeout is retryable so tenacity retries it up to
-    # 3 attempts (bounded) before propagating — still nowhere near the
-    # unbounded hang this test suite previously permitted.
-    with pytest.raises(ProviderRequestTimeout):
+    # classify_event catches parse/validation errors and returns None; a
+    # ProviderRequestTimeout is retryable so tenacity retries it up to 3
+    # attempts (bounded) before propagating. As of SCHED-OUTAGE-01 (see
+    # docs/RED_TEAM_REPORT.md), the public classify_event() no longer lets
+    # that raw ProviderRequestTimeout escape — _unavailable_on_any_error
+    # normalizes it to LlmUnavailableError so pipeline.py's existing
+    # `except LlmUnavailableError` handling (not a generic except that
+    # would silently misclassify an outage as an ordinary rejected
+    # article) is what actually receives it. The original cause is still
+    # reachable via __cause__ for diagnosis.
+    with pytest.raises(LlmUnavailableError) as exc_info:
         provider.classify_event("test article content")
+    assert isinstance(exc_info.value.__cause__, ProviderRequestTimeout)
     elapsed = time.monotonic() - start
 
     # 3 tenacity attempts x (~0.3s deadline + backoff) — generous upper

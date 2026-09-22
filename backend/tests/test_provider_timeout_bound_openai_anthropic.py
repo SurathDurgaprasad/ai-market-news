@@ -22,6 +22,7 @@ from app.core.providers.llm import (
     OpenAIProvider,
     AnthropicProvider,
     ProviderRequestTimeout,
+    LlmUnavailableError,
 )
 from tests.test_nvidia_timeout_bound import TrickleTransport
 
@@ -38,8 +39,14 @@ def test_openai_provider_enforces_hard_deadline_against_trickling_transport():
     )
 
     start = time.monotonic()
-    with pytest.raises(ProviderRequestTimeout):
+    # As of SCHED-OUTAGE-01 (docs/RED_TEAM_REPORT.md), the raw
+    # ProviderRequestTimeout no longer escapes the public classify_event()
+    # — _unavailable_on_any_error normalizes it to LlmUnavailableError so
+    # pipeline.py's LlmUnavailableError handling (not a generic except
+    # that would silently misclassify an outage) is what receives it.
+    with pytest.raises(LlmUnavailableError) as exc_info:
         provider.classify_event("test article content")
+    assert isinstance(exc_info.value.__cause__, ProviderRequestTimeout)
     elapsed = time.monotonic() - start
 
     # classify_event has its own tenacity retry (3 attempts, backoff) —
@@ -84,10 +91,13 @@ def test_anthropic_provider_enforces_hard_deadline_against_trickling_transport()
     assert provider.client is not None, "AnthropicProvider did not construct a client with a fake api key"
 
     start = time.monotonic()
-    with pytest.raises(ProviderRequestTimeout):
+    with pytest.raises(LlmUnavailableError) as exc_info:
         provider.classify_event("test article content")
+    assert isinstance(exc_info.value.__cause__, ProviderRequestTimeout)
     elapsed = time.monotonic() - start
 
-    # AnthropicProvider.classify_event has no outer tenacity retry (see
-    # llm.py) — a single call, so the bound is close to the deadline itself.
-    assert elapsed < 5.0, f"AnthropicProvider.classify_event took {elapsed:.2f}s — not bounded"
+    # AnthropicProvider.classify_event now has the same tenacity retry
+    # shape as NVIDIA/OpenAI (added alongside SCHED-OUTAGE-01 for
+    # consistency — it previously had none at all), so the bound is
+    # generous but finite, same as the OpenAI case above.
+    assert elapsed < 15.0, f"AnthropicProvider.classify_event took {elapsed:.2f}s — not bounded"

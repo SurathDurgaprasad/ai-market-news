@@ -169,6 +169,20 @@ class IntelligencePipeline:
                 self.last_outcome = "llm_unavailable"
                 logger.error("LLM unavailable; refusing to create a mock event for %s", url)
                 raise
+            except Exception as exc:
+                # Defense in depth: the LLMProvider contract requires
+                # every implementation to raise LlmUnavailableError for
+                # any unavailability (see _unavailable_on_any_error in
+                # providers/llm.py for the built-in providers), but this
+                # pipeline must not silently trust every current and
+                # future provider to honor that perfectly. Anything else
+                # escaping here is treated the same way an outage is —
+                # never silently counted as an ordinary rejected article,
+                # which would make a real outage indistinguishable from a
+                # quiet news day. See docs/RED_TEAM_REPORT.md SCHED-OUTAGE-01.
+                self.last_outcome = "llm_unavailable"
+                logger.error("LLM raised an unexpected error for %s (treated as unavailable): %s", url, exc)
+                raise LlmUnavailableError(f"classify_event failed: {type(exc).__name__}: {exc}") from exc
             score = normalize_importance_score(
                 classification.importance_score if classification else None
             )
@@ -256,6 +270,22 @@ class IntelligencePipeline:
                         except LlmUnavailableError:
                             self.last_outcome = "llm_unavailable"
                             raise
+                        except Exception as exc:
+                            # Same defense-in-depth as classify_event — see
+                            # docs/RED_TEAM_REPORT.md SCHED-OUTAGE-01.
+                            # Also load-bearing for merge correctness: an
+                            # outage silently treated as RelationshipResult
+                            # DIFFERENT_EVENT (rather than aborting) would
+                            # flood the feed with duplicate canonical events
+                            # instead of blocking ingestion, which is worse.
+                            self.last_outcome = "llm_unavailable"
+                            logger.error(
+                                "LLM raised an unexpected error during relationship classification "
+                                "for %s (treated as unavailable): %s", url, exc,
+                            )
+                            raise LlmUnavailableError(
+                                f"classify_relationship failed: {type(exc).__name__}: {exc}"
+                            ) from exc
                         logger.info(
                             "LLM RELATIONSHIP '%s' vs '%s': %s — %s",
                             title[:60], (candidate.headline or "")[:60],
@@ -281,6 +311,12 @@ class IntelligencePipeline:
                     self.last_outcome = "llm_unavailable"
                     logger.error("LLM unavailable; refusing to create a mock event for %s", url)
                     raise
+                except Exception as exc:
+                    # Same defense-in-depth as classify_event above — see
+                    # docs/RED_TEAM_REPORT.md SCHED-OUTAGE-01.
+                    self.last_outcome = "llm_unavailable"
+                    logger.error("LLM raised an unexpected error for %s (treated as unavailable): %s", url, exc)
+                    raise LlmUnavailableError(f"summarize_event failed: {type(exc).__name__}: {exc}") from exc
                     
                 raw_citations = summary.citations if summary else []
                 verified_citations = verify_citations(content, raw_citations)
