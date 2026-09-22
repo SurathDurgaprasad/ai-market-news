@@ -17,7 +17,9 @@ from app.core.fetcher import (
     pin_host,
     unpin_all,
     resolve_validated_addrinfo,
-    _reject_oversized,
+    _reject_oversized_declared_length,
+    _read_body_with_cap,
+    MAX_RESPONSE_BYTES,
 )
 from app.core import fetcher as fetcher_mod
 
@@ -122,16 +124,57 @@ class TestSsrfProtection:
 
 
 def test_reject_oversized_respects_content_length():
+    """
+    Fast-path rejection using the Content-Length header alone, before any
+    body is read. Function renamed/split from the original
+    `_reject_oversized` — see INGEST-DECOMPRESSION-BOMB-01
+    (docs/RED_TEAM_REPORT.md) for why a single post-hoc length check was
+    replaced with this pre-read header check plus a separate streaming,
+    incrementally-capped body read (_read_body_with_cap, tested below).
+    """
     resp = MagicMock()
     resp.headers = {"content-length": "3000000"}
-    resp.content = b"x"
     with pytest.raises(ValueError, match="too large"):
-        _reject_oversized(resp)
+        _reject_oversized_declared_length(resp)
 
 
-def test_reject_oversized_respects_body_len():
+def test_reject_oversized_declared_length_allows_honest_small_response():
     resp = MagicMock()
-    resp.headers = {}
-    resp.content = b"x" * (2_000_001)
+    resp.headers = {"content-length": "100"}
+    _reject_oversized_declared_length(resp)  # must not raise
+
+
+def test_read_body_with_cap_respects_streamed_size():
+    """
+    The body-size check now happens DURING a streamed read (iter_bytes),
+    not after a fully-materialized `.content` — this is what actually
+    closes the decompression-bomb gap: it aborts reading further chunks
+    as soon as the cumulative decompressed size crosses the cap, instead
+    of only checking after the whole (potentially huge) body is already
+    in memory.
+    """
+    resp = MagicMock()
+    resp.iter_bytes.return_value = iter([b"x" * (MAX_RESPONSE_BYTES + 1)])
     with pytest.raises(ValueError, match="too large"):
-        _reject_oversized(resp)
+        _read_body_with_cap(resp)
+
+
+def test_read_body_with_cap_allows_body_under_cap():
+    resp = MagicMock()
+    resp.iter_bytes.return_value = iter([b"x" * 100, b"y" * 100])
+    body = _read_body_with_cap(resp)
+    assert body == b"x" * 100 + b"y" * 100
+
+
+def test_read_body_with_cap_aborts_on_cumulative_size_across_multiple_chunks():
+    """
+    Neighboring case: no single chunk exceeds the cap, but the RUNNING
+    total across several chunks does — must still be rejected, proving
+    this checks cumulative size, not just each chunk in isolation.
+    """
+    resp = MagicMock()
+    chunk = b"x" * 1000
+    chunks_needed = (MAX_RESPONSE_BYTES // 1000) + 5
+    resp.iter_bytes.return_value = iter([chunk] * chunks_needed)
+    with pytest.raises(ValueError, match="too large"):
+        _read_body_with_cap(resp)

@@ -130,13 +130,15 @@ def is_transient_error(response: httpx.Response) -> bool:
     return response.status_code == 429 or response.status_code >= 500
 
 
-def _reject_oversized(response: httpx.Response) -> None:
+def _reject_oversized_declared_length(response: httpx.Response) -> None:
     """
-    Refuse feed/article payloads larger than MAX_RESPONSE_BYTES.
-
-    Content-Length is checked first. The body is still loaded by httpx for
-    responses that omit Content-Length; that residual case is bounded only
-    after the bytes are in memory.
+    Fast-path rejection using the Content-Length header alone, before any
+    body bytes are read. This is the wire size — for a compressed
+    response (Content-Encoding: gzip/br/deflate) it reflects the
+    COMPRESSED size, not the eventual decompressed size, so this check
+    alone is not sufficient protection against a decompression bomb (see
+    _read_body_with_cap for that). Still worth doing first: an honestly
+    oversized response is rejected without reading anything at all.
     """
     content_length = response.headers.get("content-length")
     if content_length:
@@ -147,8 +149,60 @@ def _reject_oversized(response: httpx.Response) -> None:
         else:
             if declared > MAX_RESPONSE_BYTES:
                 raise ValueError(f"Response too large ({declared} bytes)")
-    if len(response.content) > MAX_RESPONSE_BYTES:
-        raise ValueError(f"Response too large ({len(response.content)} bytes)")
+
+
+def _headers_for_already_decoded_body(original_headers: httpx.Headers) -> httpx.Headers:
+    """
+    `iter_bytes()` (used by `_read_body_with_cap`) yields already-
+    decompressed bytes — httpx's streaming layer transparently undoes
+    gzip/br/deflate as chunks arrive. When reconstructing a plain
+    `httpx.Response(content=...)` from that accumulated body, the
+    original `Content-Encoding` header must NOT be carried over: passing
+    it through makes httpx's `Response.__init__` try to gzip-decode an
+    already-decoded body a second time, which corrupts real (non-empty,
+    genuinely compressed) responses — caught by actually running this
+    against a real HTTPS response during redirect testing, not assumed.
+    `Content-Length` is also dropped since it described the original
+    (possibly compressed) wire size, not this reconstructed body's length.
+    """
+    headers = dict(original_headers)
+    for key in list(headers.keys()):
+        if key.lower() in ("content-encoding", "content-length"):
+            del headers[key]
+    return httpx.Headers(headers)
+
+
+def _read_body_with_cap(response: httpx.Response) -> bytes:
+    """
+    Read a streamed response body with a hard cap on the DECOMPRESSED
+    size, aborting as soon as the cap is crossed rather than fully
+    materializing the body first and checking afterward.
+
+    This closes a real decompression-bomb gap: httpx transparently
+    decompresses gzip/br/deflate responses, and `iter_bytes()` yields
+    already-decompressed chunks. A prior version of this function called
+    `response.content` (or relied on the non-streaming `client.get()`,
+    which eagerly reads+decompresses the whole body) and checked its
+    length only afterward — by then, a small compressed payload with a
+    high compression ratio had already been fully expanded in memory
+    (proven directly: a 48KB gzip payload decompressing to 50MB was
+    accepted into memory before any size check ran). See
+    docs/RED_TEAM_REPORT.md INGEST-DECOMPRESSION-BOMB-01.
+
+    Checking cumulative size per chunk during the read bounds this to,
+    worst case, one chunk's decompression amplification rather than the
+    whole body's — a standard, industry-recognized mitigation pattern for
+    this vulnerability class (not a perfect one: a single pathological
+    chunk could still expand significantly before its own check fires,
+    but it stops the read from continuing indefinitely, which unbounded
+    materialization did not).
+    """
+    buffer = bytearray()
+    for chunk in response.iter_bytes():
+        buffer.extend(chunk)
+        if len(buffer) > MAX_RESPONSE_BYTES:
+            raise ValueError(f"Response too large (exceeded {MAX_RESPONSE_BYTES} bytes during streamed read)")
+    return bytes(buffer)
 
 
 @retry(
@@ -191,23 +245,41 @@ def fetch_url(url: str, timeout: int = 15, max_redirects: int = 5) -> httpx.Resp
                     logger.error(f"SSRF protection blocked fetch for: {current_url} ({exc})")
                     raise ValueError(f"Unsafe URL: {current_url}") from exc
 
-                response = client.get(sanitized, headers=headers)
+                # Streamed, not client.get(): headers arrive before any
+                # body is read, so a redirect/transient-error hop's body
+                # (which we don't need) is never downloaded at all, and
+                # the eventual success body is read with a decompressed-
+                # size cap enforced DURING the read — see
+                # _read_body_with_cap for why checking only after a
+                # non-streamed client.get() completed was a real
+                # decompression-bomb gap.
+                with client.stream("GET", sanitized, headers=headers) as streamed:
+                    if streamed.status_code in (301, 302, 303, 307, 308):
+                        next_url = streamed.headers.get("Location")
+                        if not next_url:
+                            break
+                        current_url = urljoin(sanitized, next_url)
+                        logger.info(f"Following redirect to: {current_url}")
+                        continue
 
-                if response.status_code in (301, 302, 303, 307, 308):
-                    next_url = response.headers.get("Location")
-                    if not next_url:
-                        break
-                    current_url = urljoin(sanitized, next_url)
-                    logger.info(f"Following redirect to: {current_url}")
-                    continue
+                    if is_transient_error(streamed):
+                        logger.warning(f"Transient error {streamed.status_code} from {current_url}, retrying...")
+                        return httpx.Response(
+                            status_code=streamed.status_code,
+                            headers=streamed.headers,
+                            request=streamed.request,
+                        )
 
-                if is_transient_error(response):
-                    logger.warning(f"Transient error {response.status_code} from {current_url}, retrying...")
+                    _reject_oversized_declared_length(streamed)
+                    body = _read_body_with_cap(streamed)
+                    response = httpx.Response(
+                        status_code=streamed.status_code,
+                        headers=_headers_for_already_decoded_body(streamed.headers),
+                        content=body,
+                        request=streamed.request,
+                    )
+                    response.raise_for_status()
                     return response
-
-                response.raise_for_status()
-                _reject_oversized(response)
-                return response
 
             raise ValueError(f"Too many redirects for url: {url}")
     finally:

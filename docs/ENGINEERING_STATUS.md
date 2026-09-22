@@ -539,3 +539,76 @@ skipped** (skip count rose from 15 → 24, fully explained by the 9 new
 `test_openai_relationship_eval.py` tests correctly skipping by default
 without `OPENAI_EVAL=1` — same total pass/fail baseline the prior
 session reported, exactly as expected).
+
+---
+
+### 2026-09-22 — Session 4: Phase 1B (source ingestion red team)
+
+Reconnaissance first: read `parser.py`, `article_body.py` in full (hadn't
+been reviewed this session), surveyed existing test coverage across
+`test_parser.py`/`test_fetcher.py`/`test_ssrf_attacks_new.py`/
+`test_ssrf_redirects.py`/`test_urls.py` before attacking anything — found
+this coverage already substantial (23-payload SSRF corpus, DNS-mocked
+private-range rejection, redirect-to-private mocking, pagination
+detected-but-never-followed by design). Two real, confirmed defects found
+and fixed; one existing defense independently verified rather than
+assumed.
+
+#### `INGEST-DECOMPRESSION-BOMB-01` — `FIXED` (full detail in `docs/RED_TEAM_REPORT.md`)
+The highest-severity finding of this phase: a small gzip-compressed
+response could exhaust memory before any size check ran, because the
+existing `_reject_oversized` check only ran *after* `client.get()` had
+already eagerly decompressed the full body. Proven directly first (a
+48.6KB compressed payload → 50MB in memory, measured, not assumed), then
+fixed by switching `fetch_url` to streamed reads with an incrementally-
+enforced cumulative cap. **Attacking the fix itself caught a second real
+bug before it shipped**: the reconstructed response initially carried the
+original `Content-Encoding: gzip` header alongside an already-decoded
+body, causing httpx to try to decode it twice and corrupting every
+genuinely compressed real response — caught when a mocked redirect test
+silently fell through to a real network call after the rewrite (an
+unintentional but valuable "the mock no longer matches reality" signal),
+not by a unit test written in advance. Fixed, then re-verified live
+against two real feeds (hnrss.org, and a 741KB real OpenAI feed) with
+zero corruption.
+
+#### `INGEST-SILENT-01` — `FIXED`
+The same *class* of defect as SCHED-OUTAGE-01 (a real failure recorded as
+"healthy"), one layer earlier: an HTML page served where a feed should be
+(a very realistic real-world failure — a feed URL that starts 404ing)
+parses via feedparser as `bozo=False, entries=0` — indistinguishable from
+a legitimately empty, well-formed feed. Fixed with a new, deliberately
+simple `looks_like_feed()` structural check, wired into the scheduler's
+*existing* per-source failure-handling path (no new state machinery
+needed). Verified the fix doesn't introduce new false positives: a
+genuinely malformed-but-feed-shaped payload and a feed with an unusually
+verbose preamble both still behave correctly.
+
+#### `DNS-REBINDING-PIN-01` — `VERIFIED`, attack **not reproduced**
+Found a real gap between "the DNS-pinning mechanism is *designed* to
+prevent rebinding" (already true, already documented in `fetcher.py`) and
+"it was *directly verified*" (not true — the existing test never actually
+simulated a DNS answer changing after pinning). Built that exact
+simulation; the pin held. Recorded honestly as a confirmed-working
+defense, per the operating brief's explicit instruction not to invent
+findings and to record non-reproductions honestly.
+
+Full deterministic suite after this session's Phase 1B work so far:
+**401 passed, 0 failed, 24 skipped** (up from 382). 6 new test files
+(`test_dns_rebinding_pin_holds.py`, `test_scheduler_broken_feed_detection.py`,
+`test_decompression_bomb.py`, plus targeted additions to `test_parser.py`
+and `test_fetcher.py`, plus a mocking-strategy fix in
+`test_ssrf_redirects.py` made necessary by the streaming rewrite).
+
+Continuing Phase 1B: invariants 8/9 (malformed feed / encoding
+robustness) and 10/11 (prompt injection / malicious HTML in ingested
+content) are largely already covered by existing tests
+(`test_parser.py`'s XSS/entity/UTF8-BOM tests, `sanitize_html`'s
+angle-bracket-to-fullwidth-Unicode defense, `test_prompt_injection*.py`)
+— not yet independently re-verified this session beyond the reconnaissance
+read-through. Invariants 12/13 (provenance, duplicate ingestion) have
+dedicated existing test files (`test_origin_attacks.py`,
+`test_deduplication.py`) not yet re-attacked this session. Invariant 14
+(scheduler fairness / whole-cycle budget) remains the same `OPEN FINDING`
+from Phase 1A — still not fixed, still deliberately not fixed without
+real measurement first.

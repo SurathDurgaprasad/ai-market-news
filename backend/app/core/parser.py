@@ -186,6 +186,34 @@ def parse_rss_feed(payload: str) -> List[ArticleData]:
     return articles
 
 
+_FEED_ROOT_RE = re.compile(r"<rss\b|<feed\b|<rdf:rdf\b", re.IGNORECASE)
+
+
+def looks_like_feed(payload: str) -> bool:
+    """
+    True if the payload has the structural shape of an RSS/Atom/RDF feed,
+    independent of whether it parsed to any entries.
+
+    Exists to distinguish "this source's feed genuinely has nothing new
+    right now" from "this source stopped serving a feed at all" — e.g. a
+    feed URL that starts returning an HTML 404/moved-notice page after a
+    CMS migration. feedparser's own `bozo` flag does NOT catch that case:
+    an HTML page is "well-formed enough" XML-adjacent content that `bozo`
+    stays False and `entries` is simply empty, identical to a truly empty
+    but well-formed feed. See docs/RED_TEAM_REPORT.md INGEST-SILENT-01.
+
+    Deliberately simple (a root-tag substring check, not a full parse) —
+    real feeds declare their root element within the first few KB, so
+    only that prefix is scanned, bounding the cost even against a
+    maliciously large non-feed body.
+    """
+    if not payload:
+        return False
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8", errors="replace")
+    return bool(_FEED_ROOT_RE.search(payload[:4096]))
+
+
 def extract_feed_next_url(payload: str) -> Optional[str]:
     """
     Return a sanitized http(s) URL if the feed advertises Atom/RSS pagination.

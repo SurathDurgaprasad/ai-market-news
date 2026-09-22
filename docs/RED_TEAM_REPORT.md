@@ -18,6 +18,182 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### INGEST-SILENT-01 — A feed URL serving an HTML page instead of a feed was recorded "healthy" forever
+- **Severity:** Medium (correctness/observability — the same class of
+  defect as SCHED-OUTAGE-01, one layer earlier: a persistently broken
+  source is invisible to the admin sources page indefinitely)
+- **Area:** Phase 1B invariant 1 (source failure isolation) — "unexpected
+  content type" failure class specifically
+- **Status:** `CONFIRMED`, `FIXED`
+- **Description:** `feedparser`'s own `bozo` flag — the library's
+  standard "this wasn't well-formed XML" signal — does **not** fire for
+  an HTML page served where a feed should be (e.g. a feed URL that
+  starts 404ing, or a CMS migration that replaces the feed with an HTML
+  "moved" notice): `feedparser.parse(html_page)` returns `bozo=False,
+  entries=0`, structurally identical to a genuinely well-formed feed
+  that simply has nothing new. Traced through `scheduler.py`:
+  `parse_rss_feed()` returns `[]` either way, the article loop doesn't
+  execute, and the source is recorded `health_status="healthy"` —
+  indistinguishable from correct, successful polling.
+- **Reproduction, verified directly with feedparser (not assumed):**
+  ```
+  feedparser.parse('<html><body><h1>404 Not Found</h1></body></html>')
+  → bozo=False, entries=0
+  ```
+  vs. a genuinely malformed/truncated XML payload, which DOES set
+  `bozo=True` — confirming the HTML case is the more dangerous, silent
+  one precisely because feedparser's own anomaly signal doesn't catch it.
+- **Fix (`backend/app/core/parser.py`):** new `looks_like_feed()` —
+  a deliberately simple structural check (root-tag substring match for
+  `<rss`, `<feed`, or `<rdf:RDF>`, scanned only within the first 4096
+  characters, bounding cost against a maliciously large non-feed body)
+  independent of feedparser's own parsing/bozo logic. Wired into
+  `scheduler.py::run_ingestion_cycle`: when `parse_rss_feed()` returns no
+  articles AND the payload doesn't look like a feed at all, a `ValueError`
+  is raised and caught by the pipeline's **existing** per-source failure
+  handler (health_status="failing", `last_error_info` set,
+  `consecutive_failures` incremented) — reusing established
+  failure-handling machinery rather than adding new state management.
+- **Regression tests:**
+  - `test_parser.py`: 8 direct unit tests for `looks_like_feed()` (RSS,
+    Atom, RDF, HTML-404-page, empty/None, plain text, bytes input,
+    case-insensitivity).
+  - `test_scheduler_broken_feed_detection.py`: the scheduler-level
+    reproduction (HTML page → not recorded healthy, has a diagnosable
+    `last_error_info`) plus the necessary contrast case (a genuinely
+    empty well-formed feed must still be recorded healthy — the fix must
+    not conflate the two in the other direction).
+- **Neighboring attacks (both pass, confirming no new false positives):**
+  a truncated-but-still-`<rss>`-tagged malformed XML payload
+  (feedparser's genuine `bozo=True` case) is correctly NOT flagged by the
+  new "not a feed" check — any failure there is left to the pre-existing
+  per-entry exception handling; and a real feed with a verbose (20-line
+  comment) preamble before its root tag, still within the 4096-char scan
+  window, is correctly still recognized as a feed.
+- **Full suite after fix:** 396 passed, 0 failed (up from 382).
+
+### DNS-REBINDING-PIN-01 — Pin-holds-under-rebinding claim independently verified against the real mechanism
+- **Severity:** N/A (verification of an existing, previously-claimed-but-
+  not-directly-proven defense — not a new finding)
+- **Area:** Phase 1B invariant 5 (DNS rebinding / resolution safety)
+- **Status:** `VERIFIED` — attack **NOT REPRODUCED**, recorded honestly
+  as a confirmed-working defense, not invented as a finding for its own sake
+- **Gap identified by inspection:** `test_fetcher.py::test_pin_host_stores_validated_records`
+  pins a hostname to an IP and confirms `_pinned_getaddrinfo` returns
+  that IP — but the underlying `_original_getaddrinfo` mock never
+  *changes* during that test, so it only proves the pin returns what it
+  was given. That would hold true even with zero rebinding protection at
+  all; it doesn't prove the pin actually *overrides* a differing later
+  DNS answer.
+- **Attack attempted:** `test_dns_rebinding_pin_holds.py` reconfigures
+  `_original_getaddrinfo` to return a **different** (private, `127.0.0.1`)
+  IP for the *same* hostname immediately after `pin_host()` already
+  validated and pinned a public one — simulating an attacker's
+  authoritative DNS server changing its answer between the validation
+  lookup and a later connection attempt (the actual rebinding attack).
+- **Result: attack did not succeed.** `_pinned_getaddrinfo` returned the
+  originally-pinned public IP, not the new private one; the real resolver
+  was confirmed called exactly once (by `pin_host` itself), proving the
+  pin genuinely short-circuits all further resolution for that hostname
+  rather than merely being consulted opportunistically.
+- **Neighboring case, also verified:** if the *first* (validation)
+  resolution itself returns a private IP, `resolve_validated_addrinfo`
+  correctly rejects before ever pinning anything (validate-then-pin
+  ordering, not pin-then-validate).
+- **Why this is still worth recording as a finding despite finding
+  nothing wrong:** the operating brief explicitly asks that a
+  not-reproduced attack be recorded honestly rather than silently
+  skipped, and this closes a real gap between "the mechanism is designed
+  to prevent rebinding" (already documented in `fetcher.py`'s own
+  docstring) and "the mechanism was directly verified to prevent
+  rebinding" (not previously true — the existing test didn't actually
+  simulate a changing DNS answer).
+
+### INGEST-DECOMPRESSION-BOMB-01 — A small gzip-compressed response could exhaust memory before any size check ran
+- **Severity:** High (memory-exhaustion DoS against the ingestion
+  process from a single malicious/compromised source — no auth or
+  special positioning required, just a feed or article URL under
+  attacker control)
+- **Area:** Phase 1B invariant 6 — response size limits / decompression
+  expansion
+- **Status:** `CONFIRMED`, `FIXED`
+- **Description:** `fetcher.py::_reject_oversized` (the pre-existing size
+  guard) checked the `Content-Length` header first, then
+  `len(response.content)` — but `response.content` was only reachable
+  because `fetch_url` used the non-streaming `client.get()`, which
+  eagerly reads AND decompresses the entire body before returning. For a
+  `Content-Encoding: gzip` response, `Content-Length` reflects the
+  **compressed wire size**, not the eventual decompressed size — so a
+  small, honestly-sized-on-the-wire response could still decompress to
+  something enormous, and by the time the length check ran, the full
+  decompressed body was already sitting in memory.
+- **Reproduction (before any test was written — proven directly against
+  real httpx behavior first, per this session's "verify before writing
+  the regression" discipline):** a 48,623-byte gzip payload
+  (`gzip.compress(b"A" * 50_000_000)`) served through a fake httpx
+  transport decompressed to a full 50,000,000-byte `response.content` —
+  confirmed by direct measurement, not inferred from documentation.
+  1,000:1+ compression ratios are trivially achievable with repeated-byte
+  or otherwise highly-compressible content, so the achievable
+  amplification is effectively unbounded relative to any reasonable
+  `Content-Length` pre-check.
+- **Root cause:** checking response size **after** full materialization,
+  rather than **during** the read.
+- **Fix (`backend/app/core/fetcher.py`):** `fetch_url` now uses
+  `client.stream("GET", ...)` instead of `client.get(...)`. A redirect or
+  transient-error (429/5xx) hop's body is never read at all (a secondary
+  improvement: the original code fully downloaded even *discarded*
+  intermediate-redirect bodies). The eventual success body is read via
+  `_read_body_with_cap()`, which iterates `iter_bytes()` (already-
+  decompressed chunks) and aborts as soon as the **cumulative** size
+  crosses `MAX_RESPONSE_BYTES` — bounding worst-case memory to
+  (approximately) one chunk's decompression amplification rather than
+  the whole body's. `_reject_oversized` was split into
+  `_reject_oversized_declared_length` (the original header fast-path,
+  kept as-is — still useful for honestly-oversized responses) and this
+  new streaming check.
+- **Real bug caught while attacking the fix itself, before it ever
+  shipped:** reconstructing the final `httpx.Response` from the
+  accumulated (already-decompressed) bytes initially passed through the
+  *original* response headers unchanged — including `Content-Encoding:
+  gzip`. httpx's `Response.__init__` then tried to gzip-decode the
+  already-decoded body a second time, raising `DecodingError` and
+  **corrupting every genuinely gzip-compressed real response** (caught
+  immediately when a redirect test that mocked `httpx.Client.get`
+  silently fell through to a real, gzip-compressed network response
+  after the streaming rewrite, and failed with a decode error — not
+  discovered by a unit test, discovered by the mock no longer matching
+  reality and the code then hitting a real server). Fixed with
+  `_headers_for_already_decoded_body()`, which strips
+  `Content-Encoding`/`Content-Length` before reconstruction.
+- **Regression tests:**
+  - `test_fetcher.py`: `_reject_oversized_declared_length`
+    (accept/reject), `_read_body_with_cap` (single oversized chunk,
+    within-cap, and — a neighboring case — cumulative size **across
+    multiple** chunks none of which individually exceeds the cap).
+  - `test_decompression_bomb.py`: end-to-end through the real
+    `fetch_url()` entrypoint (only the transport faked) — a 20x-over-cap
+    gzip bomb compressed to well under the cap on the wire is rejected;
+    a genuinely small, honestly gzip-compressed normal response (the
+    overwhelmingly common real case) still decodes correctly — this is
+    the regression test for the Content-Encoding bug above.
+  - `test_ssrf_redirects.py`: updated to mock `httpx.Client.stream`
+    (a context manager) instead of the no-longer-used `httpx.Client.get`
+    — the tests were silently falling through to real network calls
+    after the rewrite until this was caught (33.5s real-network latency
+    on what should have been an instant mocked test was the tell).
+- **Live verification beyond mocks:** `fetch_url()` run against two real
+  URLs (`hnrss.org`, `openai.com/news/rss.xml`, the latter 741KB
+  decoded) — correct, uncorrupted XML text in both cases, including one
+  real transient-502-then-retry-succeeds cycle observed live.
+- **Full suite after fix:** 401 passed, 0 failed (up from 396).
+- **Neighboring attack, not yet checked:** `article_body.py`'s
+  enrichment fetch (`fetch_fn(url, timeout=8)`) reuses this same
+  `fetch_url`, so it inherits this fix automatically — not independently
+  re-verified with its own dedicated decompression-bomb test this
+  session (the underlying mechanism is shared, but the call site wasn't
+  separately exercised).
+
 ### IMPORTANCE-RESEARCH-01 — Benign vulnerability-trends research could be forcibly reclassified as an active security incident
 - **Severity:** Medium (importance/classification correctness, the exact
   Phase 1H hard case the operating brief named: "security keyword +

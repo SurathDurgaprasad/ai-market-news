@@ -104,7 +104,7 @@ class IngestionScheduler:
 
         try:
             from app.core.fetcher import fetch_url
-            from app.core.parser import parse_rss_feed, extract_feed_next_url
+            from app.core.parser import parse_rss_feed, extract_feed_next_url, looks_like_feed
             from app.core.pipeline import IntelligencePipeline
             from app.core.providers.llm import (
                 resolve_llm_mode,
@@ -159,6 +159,20 @@ class IngestionScheduler:
                     try:
                         response = fetch_url(s_url)
                         articles = parse_rss_feed(response.text)
+                        if not articles and not looks_like_feed(response.text):
+                            # feedparser's own `bozo` flag does not catch this:
+                            # an HTML error/notice page (e.g. after a feed URL
+                            # 404s or a CMS migration) parses as
+                            # bozo=False, entries=0 — indistinguishable from a
+                            # genuinely well-formed, currently-empty feed.
+                            # Without this check the source would be recorded
+                            # health_status="healthy" indefinitely despite no
+                            # longer serving a feed at all. See
+                            # docs/RED_TEAM_REPORT.md INGEST-SILENT-01.
+                            raise ValueError(
+                                "Fetched content does not look like an RSS/Atom/RDF feed "
+                                "(no <rss>/<feed>/<rdf:RDF> root element found)"
+                            )
                         next_page = extract_feed_next_url(response.text)
                         if next_page:
                             logger.info(

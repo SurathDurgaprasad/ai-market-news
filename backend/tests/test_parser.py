@@ -1,4 +1,4 @@
-from app.core.parser import parse_mock_source, parse_rss_feed, extract_feed_next_url
+from app.core.parser import parse_mock_source, parse_rss_feed, extract_feed_next_url, looks_like_feed
 from tests.fixtures.sources import FIXTURES
 import datetime
 import json
@@ -307,4 +307,45 @@ def test_atom_next_link_is_detected_but_entries_still_parsed():
     assert len(articles) == 1
     assert extract_feed_next_url(atom) == "https://example.com/feed?page=2"
     assert extract_feed_next_url("") is None
+
+
+# INGEST-SILENT-01 (docs/RED_TEAM_REPORT.md): feedparser's own bozo flag
+# does not catch an HTML page served where a feed should be — it parses
+# as bozo=False, entries=0, identical to a genuinely empty well-formed
+# feed. looks_like_feed() is the separate structural check that closes
+# that gap; these are its direct unit tests (the scheduler-level
+# reproduction/regression lives in test_scheduler_broken_feed_detection.py).
+
+def test_looks_like_feed_true_for_rss():
+    assert looks_like_feed('<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>') is True
+
+
+def test_looks_like_feed_true_for_atom():
+    assert looks_like_feed('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>') is True
+
+
+def test_looks_like_feed_true_for_rdf():
+    assert looks_like_feed('<?xml version="1.0"?><rdf:RDF xmlns:rdf="x"></rdf:RDF>') is True
+
+
+def test_looks_like_feed_false_for_html_error_page():
+    html = "<html><head><title>404 Not Found</title></head><body><h1>404</h1></body></html>"
+    assert looks_like_feed(html) is False
+
+
+def test_looks_like_feed_false_for_empty_or_none():
+    assert looks_like_feed("") is False
+    assert looks_like_feed(None) is False
+
+
+def test_looks_like_feed_false_for_plain_text():
+    assert looks_like_feed("this is not a feed, just some text") is False
+
+
+def test_looks_like_feed_handles_bytes_payload():
+    assert looks_like_feed(b'<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>') is True
+
+
+def test_looks_like_feed_case_insensitive():
+    assert looks_like_feed('<?xml version="1.0"?><RSS version="2.0"><channel></channel></RSS>') is True
     assert extract_feed_next_url("<rss></rss>") is None
