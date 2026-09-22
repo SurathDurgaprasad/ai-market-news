@@ -3,6 +3,20 @@
 This document lists the initial monitoring ecosystem targets required by the project directive.
 The architecture must be flexible to add to this list without code changes (data-driven registry).
 
+**Current seeded status:** `backend/seed_sources.py` currently seeds
+~22 sources (OpenAI, Anthropic, Google AI, Google DeepMind, Meta AI,
+Microsoft Research, Mistral AI, xAI, DeepSeek, Cohere, Perplexity AI,
+Stability AI, Hugging Face, NVIDIA, AWS AI, plus general tech journalism:
+TechCrunch, The Verge, Wired, Ars Technica, VentureBeat, MIT Technology
+Review, Hacker News). The 37-item watchlist below is the target scope,
+not a claim that every entry is already configured — items like Moonshot
+AI, Qwen/Alibaba, ByteDance, Tencent, Baidu, Zhipu AI, MiniMax, AI21 Labs,
+Runway, Midjourney, ElevenLabs, Cursor, Windsurf, Cline, LangChain,
+CrewAI, OpenHands, and the MCP ecosystem are on the target list but not
+yet in `seed_sources.py`. Adding them is a data change (run the seed
+script with new entries), not a code change — consistent with the
+data-driven registry goal.
+
 ## Initial Watchlist
 
 1. **OpenAI** (Primary)

@@ -1,32 +1,20 @@
-version: "3.9"
+# Local Docker setup matching the actual architecture (see docs/ARCHITECTURE.md):
+# FastAPI backend + SQLite (file-backed, no separate DB service). No
+# Postgres, Redis, or Celery — those appear in docs/ARCHITECTURE.md §8 as
+# a possible future scaling direction, not as something this compose file
+# should pretend already exists.
+#
+# The backend's in-process APScheduler (see backend/app/core/scheduler.py)
+# handles ingestion scheduling; no separate worker service is needed.
+#
+# The frontend has no Dockerfile yet (NOT IMPLEMENTED) — run it locally
+# with `npm run dev` (or `npm run build && npm start`) from frontend/,
+# pointed at this backend's port 8000. Add a frontend service here once a
+# Dockerfile exists for it; a service block referencing a nonexistent
+# Dockerfile would just reintroduce the "describes infrastructure that
+# doesn't exist" problem this file was rewritten to fix.
 
 services:
-  db:
-    image: ankane/pgvector:v0.5.1
-    environment:
-      POSTGRES_USER: ai_user
-      POSTGRES_PASSWORD: ai_password
-      POSTGRES_DB: ai_platform
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ai_user -d ai_platform"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   backend:
     build:
       context: ./backend
@@ -34,29 +22,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://ai_user:ai_password@db:5432/ai_platform
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - DATABASE_URL=sqlite:///./data/ai_platform.db
+      - LLM_PROVIDER=nvidia
+      # NVIDIA_API_KEY must be supplied by the environment (.env, shell,
+      # or `docker compose run -e`), never hardcoded here.
     volumes:
       - ./backend/app:/app/app
-
-  # celery_worker:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   command: ["celery", "-A", "app.worker", "worker", "--loglevel=info"]
-  #   environment:
-  #     - DATABASE_URL=postgresql://ai_user:ai_password@db:5432/ai_platform
-  #     - REDIS_URL=redis://redis:6379/0
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
+      - backend_data:/app/data
 
 volumes:
-  postgres_data:
+  backend_data:

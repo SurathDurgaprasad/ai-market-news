@@ -1,41 +1,18 @@
 # Implementation Status
 
-Current status based on audit against authoritative PRD and Research documents.
+**This file is retired.** It described the system as of very early
+scaffolding (Phase 1–2 items marked "scaffolded"/"not started") and was
+never updated as the system was actually built out — by the time of the
+2026-09-21 engineering audit, it was actively wrong (e.g. it described
+deduplication/clustering as "stubbed" when they are real, tested,
+non-trivial implementations).
 
-## Phase 0: Requirements / Architecture / Environment
-**Status: VERIFIED**
-- All documentation files generated.
-- Python 3.12 explicitly documented as the supported environment to ensure pre-compiled wheel compatibility for pydantic-core and psycopg.
-- Local Test Mode architecture designed to bypass Docker requirements.
+**Current status lives in [`docs/ENGINEERING_STATUS.md`](ENGINEERING_STATUS.md)**,
+which is maintained as a living document with explicit
+`VERIFIED`/`PARTIALLY VERIFIED`/`NOT VERIFIED`/`KNOWN LIMITATION`/
+`OPEN FINDING`/`FIXED` statuses and session-by-session change history,
+rather than a single point-in-time snapshot like this file was.
 
-## Phase 1: Ingestion & Source Registry
-**Status: PARTIALLY IMPLEMENTED**
-- Models scaffolded but missing full PRD schema (e.g. Health status, Polling tiers).
-- TestSourceProvider needs to be built to simulate conditional GET and exponential backoff.
-- Need deterministic Fetcher and Normalizer logic.
-
-## Phase 2: Deduplication & Event Intelligence
-**Status: SCAFFOLDED**
-- Deduplication functions stubbed, but missing MinHash/Jaccard implementations.
-- Clustering stubbed; needs fallback logic for SQLite when pgvector is unavailable in Local Test Mode.
-- Need Claim and EventCluster models per the PRD.
-
-## Phase 3: AI Enrichment (Dual-LLM & Classification)
-**Status: PARTIALLY IMPLEMENTED**
-- `TestLLMProvider` built for deterministic testing.
-- Pydantic models for structured output exist, but missing claim extraction and anchoring logic per PRD.
-- Prompt injection defense tests stubbed but not fully implemented in pipeline.
-
-## Phase 4: Storage & API
-**Status: SCAFFOLDED**
-- Basic FastAPI endpoints exist.
-- Need DB session configuration for SQLite Local Test Mode.
-- Search and filtering logic not implemented against the DB.
-
-## Phase 5: Frontend Dashboard
-**Status: SCAFFOLDED**
-- Next.js UI exists with hardcoded data. Not hooked up to the real API contract.
-
-## Phase 6: E2E Verification
-**Status: NOT STARTED**
-- Requires deterministic E2E pipeline test covering 20 PRD scenarios (duplicates, conflicting reports, malicious payloads, etc.).
+See also [`docs/ROADMAP.md`](ROADMAP.md) for a coarser phase-level view
+and [`docs/RED_TEAM_REPORT.md`](RED_TEAM_REPORT.md) for security/
+adversarial findings specifically.

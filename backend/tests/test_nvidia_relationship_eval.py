@@ -29,6 +29,7 @@ import time
 import pytest
 from app.core.providers.llm import (
     NVIDIAProvider,
+    NVIDIA_REQUEST_DEADLINE_SECONDS,
     EventRelationship,
     RelationshipResult,
     LlmUnavailableError,
@@ -45,14 +46,23 @@ _NVIDIA_AVAILABLE = (
     and provider_is_configured("nvidia")
 )
 
-pytestmark = pytest.mark.skipif(
-    not _NVIDIA_AVAILABLE,
-    reason=(
-        "Live NVIDIA eval requires: NVIDIA_EVAL=1, LLM_PROVIDER=nvidia, "
-        "TESTING=0, TEST_MODE=0, and NVIDIA_API_KEY. "
-        "conftest.py forces TESTING=1 for standard test runs."
+pytestmark = [
+    pytest.mark.skipif(
+        not _NVIDIA_AVAILABLE,
+        reason=(
+            "Live NVIDIA eval requires: NVIDIA_EVAL=1, LLM_PROVIDER=nvidia, "
+            "TESTING=0, TEST_MODE=0, and NVIDIA_API_KEY. "
+            "conftest.py forces TESTING=1 for standard test runs."
+        ),
     ),
-)
+    # Real network calls; each classify_relationship call is bounded by 3
+    # tenacity attempts x NVIDIAProvider's own hard per-request deadline
+    # plus backoff — this MUST stay derived from that constant (see
+    # test_prompt_injection_semantic.py for why a hardcoded guess here
+    # previously caused this safety net to fire before the provider's own
+    # bounded retry logic finished, on a genuinely slow but not hung call).
+    pytest.mark.timeout(int(3 * NVIDIA_REQUEST_DEADLINE_SECONDS + 60)),
+]
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

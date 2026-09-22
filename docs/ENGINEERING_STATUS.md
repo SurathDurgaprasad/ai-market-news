@@ -78,11 +78,254 @@ what has and has not been verified rather than implying completeness.
 **IMG-01 — Raw `<img>` instead of `next/image` (NOT a defect — documented tradeoff)**
 - ESLint flags this in `EventCard.tsx` and `events/[id]/page.tsx`. Not fixing blindly: article/event images come from an open-ended, unbounded set of external source domains (the whole point of the source registry), and `next/image` requires an explicit remote-pattern allowlist per domain, which is incompatible with that design without either a proxy/allowlist mechanism or `unoptimized` mode (which would defeat the point of switching). Leaving as-is; recorded here so it isn't silently "fixed" into something worse later.
 
-#### Not yet started (honest scope statement)
+#### Not yet started (honest scope statement, end of session 1)
 Everything in Phases 2–22 of the operating brief beyond the code-reading
 already summarized above: active red-teaming with new adversarial test
 cases (SSRF, prompt injection, XSS, evidence fabrication, temporal,
 concurrency stress beyond what already exists), performance measurement,
 frontend malformed-API-response testing in a live browser, full NVIDIA
-live-validation pass, and the documentation rewrite. This session
-established the baseline; subsequent sessions continue the loop from here.
+live-validation pass, and the documentation rewrite. Session 1 established
+the baseline; session 2 (below) closed out the three Phase 0 integrity
+items the user flagged and began Phase 1.
+
+---
+
+### 2026-09-21 — Session 2: Phase 0 integrity items resolved
+
+Picked up from session 1 without discarding anything. Scope: resolve the
+three flagged Phase 0 issues properly (not superficially), then continue
+into Phase 1. A correction first: **session 1's baseline test run report
+was wrong** — it said "all non-live tests observed passing," but a full
+run actually showed ~27 failures that session 1 did not investigate
+(the dot-output's `F` characters were present in the transcript and
+missed). This session re-ran the full suite, found and fixed the real
+causes, and is recording that miss here rather than quietly correcting
+it, per the instruction to track history honestly.
+
+#### 0.1 — Credential incident
+- **Verified**: `NVIDIA_API_KEY` = **PRESENT** (checked via
+  `[ -n "$NVIDIA_API_KEY" ]`; length printed, value never printed again).
+- **Rotation**: the key exposed in session 1 is still the one configured
+  in this environment (not rotated by this session — rotation is a
+  user action against the NVIDIA account, out of scope for repository
+  changes). **Documenting that rotation is recommended** if that
+  exposure is a concern; not blocking engineering work on it, per
+  instruction.
+- **Redaction added**: `backend/app/core/logger.py` now has a
+  `RedactSecretsFilter` (logging.Filter) that strips NVIDIA/OpenAI/
+  Anthropic API-key shapes, `Authorization`/`Bearer`/`Cookie` headers, and
+  generic `api_key=`/`token=`/`secret=`/`password=` kwargs from every log
+  record before it reaches a handler — catching both f-string and `%s`-arg
+  interpolation. Wired into `backend/app/main.py` (previously called raw
+  `logging.basicConfig`; the redaction-aware `setup_logging()` was dead
+  code no one called). **Regression test**: `backend/tests/test_log_redaction.py`
+  (8 tests, including one that constructs a real `NVIDIAProvider` with a
+  fake-shaped key and asserts it never appears in captured log output).
+  `FIXED`.
+
+#### 0.2 — Documentation reality check
+Rewrote every doc that described the abandoned Postgres/pgvector/Redis/
+Celery/OIDC architecture as if it were current, labeling every claim
+`CURRENT` / `PLANNED / FUTURE` / `NOT IMPLEMENTED`:
+- `docs/ARCHITECTURE.md` — full rewrite from the actual code (FastAPI +
+  SQLite/WAL + in-process APScheduler + provider abstraction; explicitly
+  documents §6 "code paths that exist but are not reachable"
+  (`clustering.py`'s pgvector path, `app/worker/` Celery scaffolding) and
+  §8 "planned/future" as legitimate future directions, not current state.
+- `docker-compose.yml` — rewritten to a single `backend` service matching
+  reality (SQLite volume, no Postgres/Redis/Celery). The frontend has no
+  Dockerfile yet, so it was **not** added as a compose service referencing
+  a nonexistent build — that would have recreated the exact problem being
+  fixed. Noted as `NOT IMPLEMENTED` with a pointer to run it locally.
+  **Caveat**: rewritten but not verified with an actual `docker compose up`
+  in this environment — `PARTIALLY VERIFIED`.
+- `docs/INGESTION.md` — full rewrite (was describing Celery-cron fetch,
+  pgvector clustering, Postgres storage, WebSocket push, and a
+  `why_it_matters` field that was deliberately removed from the product).
+- `docs/DATA_MODEL.md` — full rewrite transcribed directly from the actual
+  SQLAlchemy models; removed a fictitious `EventVersion` audit table
+  (versioning is actually `version`+`superseded_by_id` on `Event` itself),
+  a fictitious `Entity`/`EventEntity` normalized schema (entities are
+  actually plain JSON lists on `Event`), and `User`/`SavedEvent` (no auth
+  exists).
+- `docs/PRODUCT_REQUIREMENTS.md` — targeted edits (most of the product
+  vision was still accurate): marked SSO/OIDC and admin merge/split as
+  `NOT IMPLEMENTED`, corrected the "why it matters" goal to match the
+  deliberate later decision to exclude editorial commentary.
+- `docs/ROADMAP.md` — full rewrite; every phase was previously shown
+  unchecked despite most of Phases 1–7 being substantially built. Now
+  shows real per-phase status with source references.
+- `docs/SOURCE_REGISTRY.md` — added a "current seeded status" note
+  distinguishing the 37-item target watchlist from the ~22 sources
+  `backend/seed_sources.py` actually seeds today.
+- `docs/IMPLEMENTATION_STATUS.md` — retired (content was actively wrong,
+  e.g. calling working dedup/clustering "stubbed"); now a pointer to this
+  file.
+- `VERIFIED` (all docs now checked directly against code, not against
+  each other or against memory of the original brief).
+
+#### 0.3 — NVIDIA timeout root-cause investigation
+Traced the full path: pytest → test → `NVIDIAProvider.classify_event`
+(tenacity `@retry`, 3 attempts) → `_complete_json` (loops up to 4 JSON
+modes) → `_create_completion` → `openai.OpenAI.chat.completions.create`
+(its **own** internal retry, default `max_retries=2`, stacked on top of
+and independent from our tenacity retry — confirmed by inspecting the
+installed `openai==1.12.0` SDK directly) → httpx client with
+`timeout=90.0`.
+
+**Root cause, proven deterministically** (not asserted):
+`openai.OpenAI(..., timeout=90.0)` resolves to `httpx.Timeout(90.0)`,
+which sets connect/read/write/pool timeouts to 90s **each**, independently.
+httpx's read timeout bounds the gap *between* chunks of a response, not
+the response's *total* duration. `backend/tests/test_nvidia_timeout_bound.py::test_httpx_read_timeout_does_not_bound_total_wall_clock_time`
+proves this directly: a bare httpx client with `timeout=0.5s` against a
+transport that trickles 5 chunks with a 0.3s gap each (each gap under the
+nominal timeout) takes ~1.5s total — 3x the "timeout". A real server or
+proxy that drip-feeds bytes during slow generation (plausible under load
+for a 20B model) reproduces exactly this: a request that runs far past
+its nominal "timeout" while never once exceeding a single connect/read/
+write/pool phase.
+
+**Fix applied** (`backend/app/core/providers/llm.py`): every raw
+`_create_completion` call now runs through
+`call_with_hard_deadline()`, which executes it in a worker thread and
+enforces an absolute wall-clock ceiling
+(`NVIDIA_REQUEST_DEADLINE_SECONDS = 100.0`) via `Future.result(timeout=...)`,
+independent of httpx's per-phase timeouts. A ceiling breach raises
+`ProviderRequestTimeout` (subclasses `TimeoutError`, so the existing
+`nvidia_error_is_retryable()` classifier treats it exactly like any other
+transient timeout — no special-casing, still governed by the existing
+bounded tenacity retry).
+
+**Documented residual limitation, not claimed solved**: hitting the
+deadline abandons the future but cannot forcibly kill the underlying
+network call (Python cannot interrupt a blocked thread) — the abandoned
+call keeps running until httpx's own per-phase timeout eventually fires
+on it independently. This bounds what the *calling code* waits on (the
+actual invariant asked for), not the lifetime of every OS-level socket.
+Documented in the code comment directly above the shared executor.
+
+**Regression tests** (`backend/tests/test_nvidia_timeout_bound.py`, 4
+tests, all passing): the root-cause proof above; a proof that
+`NVIDIAProvider` bounds a call to ~0.5s against a transport trickling for
+2.5s; a proof `ProviderRequestTimeout` is classified retryable; an
+end-to-end proof through the public `classify_event()` entrypoint (the
+exact method the original hang occurred in) that the whole call —
+tenacity retries included — stays bounded rather than hanging.
+
+**Defense-in-depth, explicitly not the fix itself**: added
+`pytest-timeout` (global 30s default in `pytest.ini`, `timeout_method =
+thread`) so any *other*, unrelated test hang also fails loudly instead of
+blocking a run — the three live-NVIDIA tests and the
+`test_nvidia_relationship_eval.py` module get an explicit 240s override
+since real inference legitimately exceeds 30s.
+
+**Did not** replace live NVIDIA testing with mocks, and `TestLLMProvider`
+remains untouched/isolated from this change. `FIXED`, with the residual
+limitation above tracked as a `KNOWN LIMITATION`, not swept under "fixed".
+
+#### 0.4 — Baseline revalidation
+
+| Check | Result |
+|---|---|
+| Backend deterministic tests | **350 passed, 13 skipped, 0 failed** (16.7s). Up from 354 total in session 1 to 366 (350+13+3 live-deselected) — 12 new tests added this session (8 log-redaction + 4 timeout-bound). |
+| Backend live NVIDIA tests (`test_prompt_injection_semantic.py`, 3 tests) | Run against the real endpoint with the new hard-deadline fix in place; see below — this table is completed once that run (started in background) finishes. |
+| Frontend `tsc --noEmit` | Clean, 0 errors. |
+| Frontend `eslint` | 0 errors, 2 pre-existing warnings (documented tradeoff, `IMG-01`). |
+| Frontend production build (`npm run build`) | **Succeeds, exit 0.** Home page correctly renders dynamically (`ƒ`, uses `cache: 'no-store'`); admin/sources page prerenders statically with an empty list when the backend is unreachable at build time (expected — its own `try/catch` already handles that, see the component). |
+
+**Deterministic vs live, made explicit**: only
+`test_prompt_injection_semantic.py`'s 3 tests make real network calls in
+a normal run (`test_nvidia_relationship_eval.py`'s 14 tests are
+additionally gated behind `NVIDIA_EVAL=1`, unset here, so they skip). All
+other 350 passing + 13 skipped tests are fully deterministic — the 13
+skips are non-NVIDIA-key-gated `skipif`s elsewhere in the suite (not
+inspected individually this session; flagged as a small follow-up to
+confirm each skip reason is still valid, not assumed).
+
+#### New findings from this session's work (beyond the three flagged items)
+
+While root-causing the test run, three unrelated real test-suite defects
+were found and fixed (all confirmed via reproduction before and after):
+
+- **`test_api_adversarial.py` corrupted `test_api_events.py`** when both
+  ran in the same session: it mutated the shared `app.dependency_overrides`
+  FastAPI global inside each test function and never restored it,
+  leaving `test_api_events.py` (which sets its own override once at
+  module-import time) pointed at a closed, table-dropped session for
+  every one of its 24 tests. This is what session 1's dot-output was
+  actually showing (`F` characters glossed over, see correction above).
+  Fixed with a proper `autouse` fixture that saves/restores prior state.
+  `FIXED`.
+- **`test_failure_injection.py` was testing against a schema and a
+  pipeline behavior that no longer exist**: its fake LLM provider
+  imported from a module path (`app.core.llm`) that was renamed to
+  `app.core.providers.llm`, constructed the old pre-refactor
+  `EventClassification` shape (`is_ai_event`, `organizations`, `products`,
+  `people` — none of which are current fields), and asserted
+  `pipeline.last_outcome == "llm_error"` when the pipeline now uses
+  `"llm_unavailable"`. Deeper than a rename: the test also assumed
+  `pipeline.process_article()` swallows an LLM timeout and returns `None`,
+  but the pipeline was deliberately changed to **re-raise**
+  `LlmUnavailableError` so the scheduler can detect a full provider outage
+  and halt the ingestion cycle rather than silently rejecting every
+  article as ordinary noise. Rewrote the test to assert the actual,
+  intentional current behavior (`pytest.raises(LlmUnavailableError)`) and
+  added a second test for the still-relevant "provider returns `None`"
+  failure mode. `FIXED`.
+- **`test_concurrency_race.py` and `test_concurrency_stress.py` were
+  flaky due to a test-harness artifact, not a real pipeline bug**: both
+  used `:memory:` SQLite + `StaticPool` + real OS threads, which hands
+  every thread the literal same raw `sqlite3` connection/cursor object —
+  unsafe for true concurrent access regardless of `check_same_thread=False`.
+  Observed failure modes: an uncaught `sqlite3.InterfaceError: bad
+  parameter or other API misuse` in a background thread (silently
+  swallowed by Python's threading model, letting the test pass for the
+  wrong reason — a worker crashed and its article was simply never
+  persisted) and, in the stress test, intermittent duplicate-event
+  failures (2 of 3 runs) with ORM errors like *"Instance has been
+  deleted, or its row is otherwise not present."* Switched both to a real
+  file-backed SQLite engine with the same WAL/busy-timeout pragmas
+  production uses (`app/db/session.py` only uses `StaticPool` for
+  `:memory:`, never for file-backed) — this is simultaneously more
+  faithful to production's actual concurrency model (separate pooled
+  connections, not one shared raw connection) and eliminates the
+  artifact. Re-ran `test_concurrency_race.py` 5x and
+  `test_concurrency_stress.py` 8x after the fix: **deterministic pass,
+  zero flakes**, versus failing ~2/3 of runs before. Also added explicit
+  worker-exception capture + assertion to `test_concurrency_race.py` so a
+  crashed worker thread can never again silently produce a false pass.
+  `FIXED` — and this specific finding directly reinforces operating
+  principle #15 ("false merges are more damaging than missed merges";
+  here, a false *pass* was more damaging than a failing test, since it
+  hid both a harness bug and, transiently, made it look like duplicate
+  canonical events were a real pipeline bug when they were not).
+
+#### Open findings updated
+- `NVDA-01`: was `OPEN FINDING` → now `FIXED` (see 0.3 above), with the
+  abandoned-thread limitation carried forward as an explicit
+  `KNOWN LIMITATION`.
+- `DOC-01`: was `OPEN FINDING` → now `FIXED` (see 0.2 above).
+- `CORS-01`: still `OPEN FINDING` — not addressed this session; next
+  session's Phase 1/2 work should pick it up (fix is well-understood:
+  make allowed origins configurable, drop `allow_credentials` until real
+  session auth exists).
+- `DEAD-01` (`clustering.py`): unchanged — now formally documented as
+  intentionally-kept future-path dead code in `docs/ARCHITECTURE.md` §6
+  rather than left ambiguous.
+- New: `DEPS-01` (see `docs/RED_TEAM_REPORT.md`) — `requirements.txt`
+  still lists `psycopg[binary]`, `celery`, `redis`, `pgvector`, none of
+  which anything on the actual running code path imports unconditionally.
+  Not removed this session (risk of breaking `app/worker/`'s imports
+  without first confirming nothing depends on it was not yet checked)
+  — logged as `OPEN FINDING` for the next session rather than acted on
+  hastily.
+
+#### Not yet started (honest scope statement, end of session 2)
+Phase 1 (architecture audit) is starting now, in this same session, per
+the instruction to continue autonomously. Everything else in Phases
+2–22 not already covered above remains not started — same list as the
+end of session 1, minus the documentation rewrite (now done) and the
+concurrency/failure-injection/API-pollution findings (now fixed as a
+byproduct of chasing the baseline numbers, not yet from deliberate
+Phase 2+ red-teaming).

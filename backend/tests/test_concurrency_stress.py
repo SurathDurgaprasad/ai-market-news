@@ -4,7 +4,6 @@ import time
 import concurrent.futures
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.db.base_class import Base
 from app.models.source import Source
@@ -14,13 +13,27 @@ from app.core.pipeline import IntelligencePipeline
 from app.core.parser import ArticleData
 from app.core.providers.llm import TestLLMProvider
 
-def setup_db():
+def setup_db(tmp_path):
+    """
+    Real file-backed SQLite, matching production's pooling model
+    (app/db/session.py only uses StaticPool for `:memory:`/`sqlite://`).
+
+    StaticPool + `:memory:` hands every session the exact same raw
+    sqlite3 connection/cursor object; under real concurrent threads this
+    produced spurious ORM-level errors ("Instance has been deleted, or
+    its row is otherwise not present", "This result object does not
+    return rows. It has been closed automatically.") and non-deterministic
+    duplicate-event failures that were artifacts of connection sharing
+    across threads, not of pipeline logic — confirmed by this test
+    becoming deterministic once switched to a file-backed engine, which
+    gives each thread its own pooled connection the way production does.
+    """
+    db_path = tmp_path / "concurrency_stress.db"
     engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False, "timeout": 15},
-        poolclass=StaticPool,
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
-    # PRAGMA settings for better concurrency in SQLite memory
+
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
@@ -31,7 +44,7 @@ def setup_db():
 
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    
+
     db = SessionLocal()
     source1 = Source(name="Test Source A", url="http://site-a.com")
     source2 = Source(name="Test Source B", url="http://site-b.com")
@@ -85,49 +98,52 @@ def run_concurrent_workers(SessionLocal, workers_count, articles, provider, sour
             
     return results
 
-def test_concurrency_stress_same_event_different_urls_10_workers():
-    engine, SessionLocal, sid1, sid2 = setup_db()
-    
+def test_concurrency_stress_same_event_different_urls_10_workers(tmp_path):
+    engine, SessionLocal, sid1, sid2 = setup_db(tmp_path)
+
     articles = [
         ArticleData(title=f"Breaking: GPT-{i}", url=f"http://site.com/{i}", content="duplicate_trigger with enough characters to pass fifty chars check")
         for i in range(10)
     ]
-    
+
     # 10 workers all hitting the same event, 0.2s LLM delay
     provider = DelayedTestLLMProvider(delay=0.2)
     results = run_concurrent_workers(SessionLocal, 10, articles, provider, [sid1, sid2])
-    
+
     db = SessionLocal()
     events = db.query(Event).all()
     articles_db = db.query(Article).all()
     event_articles = db.query(EventArticle).all()
     db.close()
-    
-    print("Worker results:", results)
-    assert len(events) == 1, f"Expected 1 event, got {len(events)}"
-    
-    # But all 10 articles should be ingested
-    # Wait, if they are parsed fast, they might be dropped as duplicates? 
-    # No, urls are different, hashes are different (wait, content is identical so hash is identical).
-    # If content hash is identical, they are silently dropped during existing_article_by_hash.
-    
-    # So we need different hashes!
-    assert True
 
-def test_concurrency_stress_same_event_different_urls_different_content():
-    engine, SessionLocal, sid1, sid2 = setup_db()
-    
+    worker_errors = [r for r in results if isinstance(r, Exception)]
+    assert not worker_errors, f"Worker thread(s) raised: {worker_errors}"
+    assert len(events) == 1, f"Expected 1 event, got {len(events)}"
+
+    # All 10 articles share identical content, so only the first is ever
+    # persisted as an Article row — the rest are dropped as exact content-hash
+    # duplicates before an event is even attempted (pipeline.py's
+    # existing_article_by_hash check). That is correct dedup behavior, not a
+    # gap: this test's job is to prove concurrent *event* creation converges
+    # on one canonical event, which the assertion above already does.
+    assert len(articles_db) >= 1
+
+def test_concurrency_stress_same_event_different_urls_different_content(tmp_path):
+    engine, SessionLocal, sid1, sid2 = setup_db(tmp_path)
+
     # Different content so hashes are different, but LLM identifies them as same event!
     articles = [
         ArticleData(title=f"Breaking: GPT-{i}", url=f"http://site.com/{i}", content=f"duplicate_trigger {i} with enough characters to pass fifty chars check")
         for i in range(20)
     ]
-    
+
     provider = DelayedTestLLMProvider(delay=0.1)
     results = run_concurrent_workers(SessionLocal, 20, articles, provider, [sid1, sid2])
-    
+
     db = SessionLocal()
     events = db.query(Event).all()
     db.close()
-    
+
+    worker_errors = [r for r in results if isinstance(r, Exception)]
+    assert not worker_errors, f"Worker thread(s) raised: {worker_errors}"
     assert len(events) == 1, f"Expected 1 canonical event, got {len(events)}"

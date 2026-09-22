@@ -2,10 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+from app.core.logger import setup_logging
+
+setup_logging()
 
 from contextlib import asynccontextmanager
 from app.core.scheduler import scheduler

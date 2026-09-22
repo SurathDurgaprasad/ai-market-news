@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Type, TypeVar
+import concurrent.futures
 import json
 import os
 import re
@@ -15,6 +16,49 @@ from app.core.ai_processor import EventClassification, SourceGroundedSummary
 from app.core.runtime import is_test_runtime
 
 logger = logging.getLogger(__name__)
+
+
+class ProviderRequestTimeout(TimeoutError):
+    """
+    A single raw HTTP attempt to an LLM provider exceeded its hard
+    wall-clock deadline.
+
+    This is deliberately distinct from httpx's own connect/read/write/pool
+    timeouts: those bound the gap between I/O events, not a request's
+    total duration (see backend/tests/test_nvidia_timeout_bound.py for a
+    deterministic proof, and docs/RED_TEAM_REPORT.md NVDA-01 for the
+    incident that prompted this). Subclasses TimeoutError so existing
+    retryable-error classification (nvidia_error_is_retryable) treats it
+    the same as any other transient timeout without special-casing.
+    """
+
+
+# Shared executor enforcing hard wall-clock deadlines on provider HTTP
+# calls. Sized generously for this application's actual concurrency
+# pattern (a single in-process ingestion scheduler thread processing
+# sources sequentially — see app/core/scheduler.py); not a general-purpose
+# thread pool for request handling.
+#
+# Known limitation: hitting the deadline abandons the future but cannot
+# forcibly kill the underlying network call — Python has no API to
+# interrupt a blocked thread. The abandoned thread keeps running until
+# httpx's own (per-phase) timeout eventually fires on it independently.
+# This bounds what the CALLING code waits on (the actual invariant this
+# fix restores), not the lifetime of every OS-level socket.
+_PROVIDER_DEADLINE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="llm-provider-deadline"
+)
+
+
+def call_with_hard_deadline(fn, *args, deadline_seconds: float, **kwargs):
+    """Run fn(*args, **kwargs) with an absolute wall-clock ceiling."""
+    future = _PROVIDER_DEADLINE_EXECUTOR.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=deadline_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        raise ProviderRequestTimeout(
+            f"Provider HTTP call exceeded hard deadline of {deadline_seconds}s"
+        ) from exc
 
 LLM_TEST = "test"
 LLM_PRODUCTION = "production"
@@ -454,6 +498,15 @@ class OpenAIProvider(LLMProvider):
 ProductionLLMProvider = OpenAIProvider
 
 
+# Hard ceiling on a single raw NVIDIA HTTP attempt, independent of the
+# openai client's own timeout= (which only bounds per-phase I/O gaps, not
+# total call duration — see ProviderRequestTimeout's docstring above).
+# Generous enough to not clip legitimate slow generation from a 20B model
+# under normal load, while still turning a genuine stall into a bounded,
+# retryable failure instead of an indefinite hang.
+NVIDIA_REQUEST_DEADLINE_SECONDS = 100.0
+
+
 class NVIDIAProvider(LLMProvider):
     """
     NVIDIA hosted NIM via the OpenAI-compatible /v1 endpoint.
@@ -467,14 +520,22 @@ class NVIDIAProvider(LLMProvider):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
+        http_client=None,
+        request_deadline_seconds: float = NVIDIA_REQUEST_DEADLINE_SECONDS,
     ):
         import openai
         from app.core.config import settings
         key = api_key or settings.NVIDIA_API_KEY or os.environ.get("NVIDIA_API_KEY")
         self.model = model or settings.NVIDIA_MODEL
         self.base_url = (base_url or settings.NVIDIA_BASE_URL or "https://integrate.api.nvidia.com/v1").rstrip("/")
+        self.request_deadline_seconds = request_deadline_seconds
         self.client = (
-            openai.OpenAI(api_key=key, base_url=self.base_url, timeout=90.0)
+            openai.OpenAI(
+                api_key=key,
+                base_url=self.base_url,
+                timeout=90.0,
+                http_client=http_client,
+            )
             if key
             else None
         )
@@ -494,7 +555,11 @@ class NVIDIAProvider(LLMProvider):
             kwargs["extra_body"] = {"guided_json": schema}
         elif mode == "json_object":
             kwargs["response_format"] = {"type": "json_object"}
-        return self.client.chat.completions.create(**kwargs)
+        return call_with_hard_deadline(
+            self.client.chat.completions.create,
+            deadline_seconds=self.request_deadline_seconds,
+            **kwargs,
+        )
 
     def _complete_json(self, system: str, user: str, model_cls: Type[T]) -> T:
         if not self.client:

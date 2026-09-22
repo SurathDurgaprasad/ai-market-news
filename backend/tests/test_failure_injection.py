@@ -1,93 +1,108 @@
 import pytest
 from app.core.pipeline import IntelligencePipeline
-from app.models.article import Article
+from app.core.providers.llm import LLMProvider, LlmUnavailableError, EventClassification
+from app.core.ai_processor import SourceGroundedSummary
 from app.core.parser import ArticleData
 from datetime import datetime, timezone
 from uuid import uuid4
 
-class FailingLLMProvider:
+
+class FailingLLMProvider(LLMProvider):
+    """Minimal LLMProvider double for exercising pipeline failure paths."""
+
     def __init__(self, fail_on="timeout"):
         self.fail_on = fail_on
         self.calls = 0
 
-    def generate_extraction(self, article_data, existing_events):
+    def classify_event(self, content: str):
         self.calls += 1
-        from app.core.llm import LlmUnavailableError
         if self.fail_on == "timeout":
             raise LlmUnavailableError("LLM API timed out")
-            
-        from app.core.llm import EventExtraction
-        if self.fail_on == "malformed":
-            return None # Simulate JSON parse failure returning None
-        elif self.fail_on == "missing_fields":
-            return EventExtraction(headline="It happened", importance_score=50, short_summary="", what_changed="", citations=[]) # Missing short_summary
-        elif self.fail_on == "drop":
+        if self.fail_on == "unparseable":
+            # Simulates the provider giving up on malformed model output
+            # (see NVIDIAProvider.classify_event, which returns None rather
+            # than raising when the schema can't be validated).
             return None
-        return EventExtraction(headline="Success", short_summary="Success summary", importance_score=50, what_changed="", citations=[])
-
-    def classify_event(self, text: str):
-        from app.core.providers.llm import LlmUnavailableError
-        if self.fail_on == "timeout":
-            raise LlmUnavailableError("LLM API timed out")
-            
-        from app.core.providers.llm import EventClassification
         return EventClassification(
-            is_ai_event=True,
-            importance_score=50,
+            tags=["Test"],
+            categories=["Test"],
+            entities=["TestCorp"],
+            primary_entities=["TestCorp"],
+            mentioned_entities=[],
             event_kind="other",
             technical_change_scope="product",
             security_impact="none",
-            organizations=[],
-            products=[],
-            people=[]
+            importance_score=50,
+            importance_reasoning="test",
         )
 
-    def compare_events(self, new_text: str, existing_events: list):
-        return None
+    def summarize_event(self, content: str):
+        return SourceGroundedSummary(
+            headline="Success",
+            short_summary="Success summary",
+            what_changed="",
+            citations=[],
+        )
 
-def test_pipeline_llm_timeout(db_session):
-    # If the LLM times out, the pipeline should catch the exception,
-    # log it, and return None (dropping the article for now, maybe retry later).
-    pipeline = IntelligencePipeline(db_session, llm_env="test")
-    pipeline.llm = FailingLLMProvider(fail_on="timeout")
-    
+    def is_same_event(self, content: str, event_summary: str, context=None) -> bool:
+        return False
+
+
+def _make_source(db_session, name="Test Source", url="http://test.com"):
     from app.models.source import Source
-    source = Source(id=uuid4(), name="Test Source", url="http://test.com")
+    source = Source(id=uuid4(), name=name, url=url)
     db_session.add(source)
     db_session.commit()
+    return source
 
+
+def test_pipeline_llm_timeout(db_session):
+    """
+    An LLM timeout/outage must propagate, not be swallowed into a silent
+    reject. This is intentional fail-closed behavior (see pipeline.py's
+    explicit `except LlmUnavailableError: ... raise`): the caller
+    (app/core/scheduler.py::run_ingestion_cycle) depends on this exception
+    reaching it so it can mark the whole ingestion cycle as LLM-blocked,
+    rather than the pipeline silently treating every article as "rejected"
+    and masking a full provider outage as ordinary noise filtering.
+    """
+    pipeline = IntelligencePipeline(db_session, llm_env="test")
+    pipeline.llm = FailingLLMProvider(fail_on="timeout")
+
+    source = _make_source(db_session)
     article_data = ArticleData(
         title="Test Article",
         url="http://test.com/1",
-        content="This is a test article." * 10,
+        content="This is a test article. " * 10,
         published_at=datetime.now(timezone.utc)
     )
 
-    # Pipeline should not crash
-    event = pipeline.process_article(article_data, source.id)
-    assert event is None
-    assert pipeline.last_outcome == "llm_error"
+    with pytest.raises(LlmUnavailableError):
+        pipeline.process_article(article_data, source.id)
 
-def test_pipeline_llm_missing_fields(db_session):
-    # If the LLM returns missing fields, the JSON parser should handle it
-    # or the pipeline should reject the incomplete event.
+    assert pipeline.last_outcome == "llm_unavailable"
+
+
+def test_pipeline_classification_unparseable_is_rejected_cleanly(db_session):
+    """
+    When the provider cannot produce a usable classification at all (e.g.
+    NVIDIA returned unparseable JSON across every JSON mode and
+    NVIDIAProvider.classify_event returns None rather than raising), the
+    pipeline must reject the article cleanly — no exception, no event
+    created — rather than crashing on `classification.importance_score`.
+    """
     pipeline = IntelligencePipeline(db_session, llm_env="test")
-    pipeline.llm = FailingLLMProvider(fail_on="missing_fields")
-    
-    from app.models.source import Source
-    source = Source(id=uuid4(), name="Test Source 2", url="http://test2.com")
-    db_session.add(source)
-    db_session.commit()
+    pipeline.llm = FailingLLMProvider(fail_on="unparseable")
 
+    source = _make_source(db_session, name="Test Source 2", url="http://test2.com")
     article_data = ArticleData(
         title="Test Article",
         url="http://test.com/2",
-        content="This is a test article." * 10,
+        content="This is a test article. " * 10,
         published_at=datetime.now(timezone.utc)
     )
 
     event = pipeline.process_article(article_data, source.id)
-    # The pipeline rejects events that are missing short_summary or headline
     assert event is None
-    assert pipeline.last_outcome == "llm_error" or pipeline.last_outcome == "dropped"
-
+    assert pipeline.last_outcome == "rejected"
+    assert pipeline.llm.calls == 1
