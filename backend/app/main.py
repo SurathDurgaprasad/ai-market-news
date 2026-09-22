@@ -52,10 +52,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+from app.core.config import settings
+
+# No wildcard + no credentials: this API has no cookie/session auth
+# (confirmed by absence of any auth module — docs/ARCHITECTURE.md §5), so
+# there is nothing for a credentialed cross-origin request to steal today.
+# Still: an explicit allowlist, not "*", both because "*" + credentials is
+# a known-bad combination the moment auth is ever added, and because it's
+# no harder to configure correctly from the start. See
+# docs/RED_TEAM_REPORT.md CORS-01.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: Restrict in production
-    allow_credentials=True,
+    allow_origins=settings.get_cors_allowed_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

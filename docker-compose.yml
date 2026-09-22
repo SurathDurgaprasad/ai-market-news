@@ -24,6 +24,11 @@ services:
     environment:
       - DATABASE_URL=sqlite:///./data/ai_platform.db
       - LLM_PROVIDER=nvidia
+      # Defaults to http://localhost:3000 (see backend/app/core/config.py)
+      # for local dev; override to the frontend's real origin(s) here for
+      # any other deployment. No wildcard — see docs/RED_TEAM_REPORT.md
+      # CORS-01.
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
       # NVIDIA_API_KEY must be supplied by the environment (.env, shell,
       # or `docker compose run -e`), never hardcoded here.
     volumes:

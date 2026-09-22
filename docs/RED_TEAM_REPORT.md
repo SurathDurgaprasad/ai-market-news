@@ -125,32 +125,48 @@ is secure"; read it as "section X has not been attacked yet."
 - **Severity:** Low today, escalates to Medium/High if session auth is
   ever added without revisiting this
 - **Area:** Phase 12 — API red team
-- **Status:** OPEN FINDING
-- **Description:** `backend/app/main.py`:
-  ```python
-  app.add_middleware(
-      CORSMiddleware,
-      allow_origins=["*"],  # TODO: Restrict in production
-      allow_credentials=True,
-      ...
-  )
-  ```
-  `allow_origins=["*"]` + `allow_credentials=True` is a known-bad
-  combination. The code's own comment already flags it as a TODO.
-- **Attack:** Not yet executed against a running instance (no CSRF-style
-  PoC attempted this session). Given there is currently no cookie/session
-  auth anywhere in the codebase (confirmed by absence of any auth module
-  in `backend/app`), there is nothing sensitive for this to currently leak
-  via credentialed cross-origin requests — but this needs re-checking the
-  moment any auth is added, not deferred indefinitely.
+- **Status:** FIXED (session 2, 2026-09-22)
+- **Description:** `backend/app/main.py` combined `allow_origins=["*"]`
+  with `allow_credentials=True` — a known-bad combination. The code's own
+  comment already flagged it as a TODO.
+- **Attack:** no CSRF-style PoC was needed to justify the fix — there is
+  no cookie/session auth anywhere in the codebase (confirmed by absence
+  of any auth module in `backend/app`), so there was nothing sensitive
+  for this to currently leak via credentialed cross-origin requests. Fixed
+  anyway rather than deferred, because the combination becomes exploitable
+  the instant auth is added and is easy to miss re-checking at that point.
 - **Root cause:** Leftover permissive default from early scaffolding,
   never tightened.
-- **Fix:** Not yet applied. Planned: make allowed origins configurable
-  (mirroring how other secrets/config are read from environment) and
-  default to the actual frontend origin, not `*`; drop
-  `allow_credentials=True` unless/until real session auth exists that
-  needs it.
-- **Regression test:** Not yet written.
+- **Fix:** `backend/app/core/config.py` gained a `CORS_ALLOWED_ORIGINS`
+  setting (comma-separated, env-configurable, defaults to the frontend's
+  local dev origins `http://localhost:3000`/`http://127.0.0.1:3000` —
+  mirroring the existing pattern for other config) and a
+  `get_cors_allowed_origins()` helper. `backend/app/main.py` now passes
+  that allowlist to `CORSMiddleware` and sets `allow_credentials=False`
+  (nothing currently needs it; add it back deliberately alongside real
+  auth, not as an unexamined default). `docker-compose.yml` documents the
+  env var.
+- **Regression test:** `backend/tests/test_cors_config.py` (5 tests) —
+  config parsing (comma-split, whitespace/empty handling, default is not
+  `*`), and two tests against a real `TestClient` request: a configured
+  origin gets `Access-Control-Allow-Origin` echoed back with no
+  `Access-Control-Allow-Credentials` header, and an unlisted origin does
+  not get its origin echoed back.
+- **Live verification, not just unit tests:** started both the real
+  backend (production LLM mode, real `ai_platform.db` with existing data)
+  and the real frontend dev server, loaded the dashboard in an actual
+  browser, and confirmed via `read_network_requests` that
+  `NewEventsNotifier.tsx`'s client-side cross-origin fetch
+  (`localhost:3000` → `localhost:8000`) succeeds (`200 OK`) under the new
+  config, with zero console errors and zero server-side errors across the
+  home feed, an event detail page, and the admin sources page (which also
+  exercises the `AdminSource` typing fix from Phase 0 session 1 with real
+  data — 10 real sources rendered correctly).
+- **Neighboring attack:** confirmed the frontend's own client-side fetch
+  never used `credentials: 'include'`, so `allow_credentials=False` is a
+  pure hardening change with zero functional impact on the current
+  frontend — not a tradeoff that happened to work, a change with no
+  behavioral cost today.
 
 ### DOC-01 — Architecture documentation describes a non-existent stack
 - **Severity:** Low (accuracy/trust issue, not exploitable), but high

@@ -55,9 +55,18 @@ class Settings(BaseSettings):
     # SQLite is the product database. Do not point this at PostgreSQL.
     DATABASE_URL: str = "sqlite:///./ai_platform.db"
     
-    # Redis / Celery
+    # Redis / Celery — unused (see docs/ARCHITECTURE.md §6); kept as a
+    # config field only because nothing currently reads it, so removing it
+    # is harmless but also not required.
     REDIS_URL: str = "redis://localhost:6379/0"
-    
+
+    # Comma-separated list of allowed CORS origins. No wildcard by
+    # default — see docs/RED_TEAM_REPORT.md CORS-01: allow_origins=["*"]
+    # combined with allow_credentials=True was a known-bad combination.
+    # Defaults to the frontend's local dev origins; override via env for
+    # any other deployment target.
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     # Which production provider the factory may construct. Never inferred from
     # a leftover OpenAI key if nvidia is selected.
     LLM_PROVIDER: str = "nvidia"
@@ -81,5 +90,9 @@ class Settings(BaseSettings):
         if url.startswith("sqlite"):
             return url
         return "sqlite:///./ai_platform.db"
+
+    def get_cors_allowed_origins(self) -> list[str]:
+        raw = self.CORS_ALLOWED_ORIGINS or ""
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 settings = Settings()

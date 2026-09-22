@@ -69,8 +69,9 @@ what has and has not been verified rather than implying completeness.
 - `docs/ARCHITECTURE.md` (PostgreSQL + pgvector + Redis + Celery + OIDC/SAML) and root `docker-compose.yml` (Postgres service with hardcoded `ai_password`, commented-out Celery worker) both describe the pre-SQLite-pivot architecture. The real, intentional architecture (SQLite, no Celery/Redis in the active path, no auth layer) lives only in code comments (`config.py`: *"SQLite is the product database. Do not point this at PostgreSQL."*) and this status doc.
 - Not yet fixed. Planned for Phase 20: rewrite `docs/ARCHITECTURE.md` to match reality; either delete `docker-compose.yml` or rewrite it as a single SQLite-backed `backend` + `frontend` compose file with no fabricated services.
 
-**CORS-01 — Wildcard CORS with credentials enabled (OPEN, low confirmed impact so far)**
-- `backend/app/main.py`: `allow_origins=["*"]` combined with `allow_credentials=True`, marked with an existing `# TODO: Restrict in production` comment. No cookie/session-based auth exists yet in this codebase (confirmed by absence of any auth module), so the practical exploitability today looks low, but the combination is a known-bad pattern that becomes a real credentialed-CSRF-style hole the moment any cookie auth is added, and some CORS stacks will reflect the literal origin for a wildcard+credentials config regardless. Needs a decision: restrict `allow_origins` to a configured frontend origin (env-driven, matching how `NVIDIA_API_KEY` etc. are already handled) and drop `allow_credentials` unless/until real session auth exists.
+**CORS-01 — Wildcard CORS with credentials enabled — `FIXED` in session 2 (see below and `docs/RED_TEAM_REPORT.md`)**
+- Was: `backend/app/main.py`: `allow_origins=["*"]` combined with `allow_credentials=True`, marked with an existing `# TODO: Restrict in production` comment. No cookie/session-based auth exists yet in this codebase (confirmed by absence of any auth module), so the practical exploitability today looked low, but the combination is a known-bad pattern that becomes a real credentialed-CSRF-style hole the moment any cookie auth is added.
+- Now: env-configurable allowlist (`CORS_ALLOWED_ORIGINS`, default `http://localhost:3000,http://127.0.0.1:3000`) and `allow_credentials=False`. Verified with 5 new tests plus a live browser session (real backend + real frontend, cross-origin fetch confirmed working, zero console/server errors).
 
 **DEAD-01 — `app/core/clustering.py` is unreachable in the running system (OPEN, low severity)**
 - Its own docstring says as much: *"NOT called by the primary pipeline, which uses a layered entity + LLM approach instead."* It only activates under `pgvector`, which is never installed/available under the SQLite-only product config. Not a bug, but worth a decision in Phase 17: keep as an explicitly-labeled future upgrade path (fine as-is, arguably already labeled clearly enough) vs. remove to reduce surface area. Leaning toward keep + doc note, pending no other findings change that.
@@ -315,10 +316,11 @@ were found and fixed (all confirmed via reproduction before and after):
   abandoned-thread limitation carried forward as an explicit
   `KNOWN LIMITATION`.
 - `DOC-01`: was `OPEN FINDING` → now `FIXED` (see 0.2 above).
-- `CORS-01`: still `OPEN FINDING` — not addressed this session; next
-  session's Phase 1/2 work should pick it up (fix is well-understood:
-  make allowed origins configurable, drop `allow_credentials` until real
-  session auth exists).
+- `CORS-01`: was `OPEN FINDING` → now `FIXED` (this was picked up as the
+  first Phase 1 action, immediately after Phase 0 closed — env-configurable
+  origin allowlist, `allow_credentials=False`, 5 regression tests, and a
+  live browser verification with both real servers running. See
+  `docs/RED_TEAM_REPORT.md`).
 - `DEAD-01` (`clustering.py`): unchanged — now formally documented as
   intentionally-kept future-path dead code in `docs/ARCHITECTURE.md` §6
   rather than left ambiguous.
@@ -335,9 +337,18 @@ were found and fixed (all confirmed via reproduction before and after):
 
 #### Not yet started (honest scope statement, end of session 2)
 Phase 1 (architecture audit) is starting now, in this same session, per
-the instruction to continue autonomously. Everything else in Phases
-2–22 not already covered above remains not started — same list as the
-end of session 1, minus the documentation rewrite (now done) and the
-concurrency/failure-injection/API-pollution findings (now fixed as a
-byproduct of chasing the baseline numbers, not yet from deliberate
-Phase 2+ red-teaming).
+the instruction to continue autonomously. First Phase 1 action taken:
+`CORS-01` fix (see above), verified with a live browser session against
+both real servers (also incidentally re-confirmed the Phase 0 session 1
+`AdminSource` typing fix and the home/detail feed both render real data
+correctly end-to-end). Everything else in Phases 2–22 not already
+covered above remains not started — same list as the end of session 1,
+minus the documentation rewrite (now done) and the
+concurrency/failure-injection/API-pollution/CORS findings (now fixed).
+
+This session also survived two environment interruptions (a usage-limit
+restore and a machine crash/restart) mid-work. Both times: verified git
+log/status and re-ran the deterministic suite before continuing, rather
+than assuming prior state was intact. No work was lost either time —
+recorded here as evidence the process held up under real interruption,
+not just as a note.
