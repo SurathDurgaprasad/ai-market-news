@@ -18,6 +18,58 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### DB-ISOLATION-01 — SQLite/WAL transaction isolation and rollback scoping, directly verified (not assumed)
+- **Severity:** N/A (verification, not a defect)
+- **Area:** Phase 1B, second attack pass, Area C (database integrity red
+  team) — the pass's explicit instruction was "Do not assume transaction
+  isolation works because SQLite/WAL is enabled. Prove it."
+- **Status:** `VERIFIED`, both properties hold; attack **not reproduced**
+- **Description:** Reconnaissance found solid existing coverage for
+  *eventual convergence* under concurrent writers
+  (`test_concurrency_race.py`, `test_concurrency_stress.py` — "does the
+  system end up with exactly one canonical event") but nothing that
+  directly proves the more fundamental property those tests implicitly
+  rely on: that an in-flight, uncommitted write on one connection is
+  genuinely invisible to a concurrent reader on another connection until
+  commit (no dirty reads), and that a rollback triggered by one article's
+  failure never reverts an earlier, already-committed article/event from
+  the same ingestion cycle's shared session (mirroring
+  `scheduler.py`'s real per-article loop: each successful
+  `process_article()` call commits on its own; a later article's
+  exception triggers the generic `except Exception: db.rollback()`
+  handler).
+  **Built and ran two direct proofs, against a real file-backed SQLite
+  engine configured identically to `app/db/session.py`'s production
+  PRAGMAs (WAL, synchronous=NORMAL, busy_timeout=30000,
+  foreign_keys=ON) — explicitly NOT `:memory:`+`StaticPool`, per this
+  pass's explicit instruction:**
+  1. `test_uncommitted_write_is_invisible_to_a_concurrent_reader`: a
+     writer thread inserts a row, flushes (pending, uncommitted), then
+     blocks. While blocked, a separate connection queries the same table
+     — **0 rows visible**. Only after the writer commits does a fresh
+     query see the row. No dirty read occurred.
+  2. `test_rollback_of_one_article_does_not_affect_an_earlier_committed_article`:
+     one article is fully processed and committed (`created`) via the
+     real pipeline. A second, doomed write is staged (flushed,
+     uncommitted) in the same shared session, an exception is raised, and
+     `db.rollback()` is called — exactly scheduler.py's own per-article
+     exception path. The first article/event, already committed, is
+     confirmed unchanged; the doomed article is confirmed absent.
+  Both properties held. Recorded honestly as confirmed-working
+  infrastructure, per the operating brief's explicit instruction not to
+  invent findings and to record non-reproductions honestly — this session
+  did not weaken, replace, or add exception handling to
+  `pipeline.py`/`scheduler.py`'s transaction logic, because no defect was
+  found to justify a change.
+  **Also checked (clean, not a defect):** a NUL byte (`\x00`) embedded in
+  an article's `title`/`raw_content` is stored and read back byte-for-byte
+  intact through SQLAlchemy/SQLite/Python's `sqlite3` driver — no silent
+  truncation at the NUL boundary (the classic C-string-truncation
+  failure mode this was checked against did not reproduce).
+- **New tests:** `backend/tests/test_db_integrity_attacks.py` (2 tests),
+  both passing against the production-equivalent file-backed
+  configuration.
+
 ### DEDUP-CONTRADICTION-01 — Two articles making opposite factual claims about the same subject could fast-merge into one event with no LLM check at all
 - **Severity:** High (correctness/trust — the highest-priority failure
   mode for this attack pass: a **false merge**, explicitly flagged as

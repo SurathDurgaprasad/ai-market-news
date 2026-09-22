@@ -738,4 +738,33 @@ honestly rather than silently re-run until green. Not modified: out of
 scope for Areas A–E of this pass, and fixing live-test flakiness was not
 part of the mandate.
 
-Next: Area C (database integrity red team) — not yet started.
+#### Area C — Database integrity red team: `DB-ISOLATION-01` — `VERIFIED`, attack **not reproduced**
+
+Explicit instruction for this area: don't assume SQLite/WAL gives real
+transaction isolation just because it's configured — prove it directly.
+Reconnaissance found `test_concurrency_race.py`/`test_concurrency_stress.py`
+already prove *eventual convergence* under concurrent writers (exactly
+one canonical event survives a race), but nothing directly proved the
+more basic property those tests lean on: that an uncommitted write is
+genuinely invisible to a concurrent reader, and that a rollback triggered
+by one article's failure can't reach back and revert an earlier,
+already-committed article/event in the same shared session.
+
+Built two direct proofs against a file-backed SQLite engine configured
+identically to `app/db/session.py`'s production PRAGMAs (not
+`:memory:`+`StaticPool`, per this area's explicit instruction): (1) a
+writer thread flushes-but-doesn't-commit an INSERT while a separate
+connection queries and sees zero rows, then sees exactly one row after
+commit — no dirty read; (2) a real committed article/event survives
+completely unchanged after a second, doomed write in the same session is
+flushed and then rolled back via the exact generic exception handler
+`scheduler.py` uses for real per-article failures. Both held. Also
+checked NUL-byte handling in `title`/`raw_content` — stored and read back
+intact, no silent truncation.
+
+No defect found — recorded honestly as `VERIFIED` infrastructure rather
+than forcing a finding. No production code changed for this area; 2 new
+tests in `backend/tests/test_db_integrity_attacks.py`. Full details in
+`docs/RED_TEAM_REPORT.md` (`DB-ISOLATION-01`).
+
+Next: Area D (article_body enrichment path integration test) — not yet started.
