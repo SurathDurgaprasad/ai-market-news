@@ -41,7 +41,19 @@ This rewrite replaces that description with the real one.
   `TestLLMProvider` used only under `TESTING=1`/`TEST_MODE=1`, and a
   `FailClosedLLMProvider` that raises on every call when no production
   provider is configured. Production never silently substitutes
-  `TestLLMProvider` — see `resolve_llm_mode()`/`get_llm_provider()`.
+  `TestLLMProvider` — see `resolve_llm_mode()`/`get_llm_provider()`. All
+  three real providers use the same manual JSON-schema-in-prompt +
+  Pydantic-validation pattern (not SDK-specific structured-output
+  helpers) and the same hard-wall-clock-deadline wrapper around every raw
+  HTTP call (`call_with_hard_deadline`) — this uniformity was restored
+  deliberately in Phase 1 after `OpenAIProvider` and `AnthropicProvider`
+  were found to have real, independent SDK-compatibility bugs that made
+  every real call to either of them crash; see
+  `docs/RED_TEAM_REPORT.md` `OPENAI-BROKEN-01`. Only NVIDIA is exercised
+  by a live-call test tier (gated behind `NVIDIA_API_KEY`); OpenAI/
+  Anthropic are covered by tests that exercise the real SDK object
+  against a fake transport, not a live endpoint (documented residual gap
+  — see that finding's "neighboring attack" note).
 
 There is no message broker, no worker pool, and no vector database in
 the running system today. `backend/app/worker/` (Celery scaffolding) and

@@ -121,6 +121,105 @@ is secure"; read it as "section X has not been attacked yet."
   NVIDIA testing with mocks, and `TestLLMProvider` remains untouched and
   isolated from this change, per instruction.
 
+### OPENAI-BROKEN-01 — `OpenAIProvider` crashed on every real call; `AnthropicProvider` had a separate, independent SDK-compatibility bug
+- **Severity:** High in principle (complete, silent functional failure of
+  a whole provider — not a graceful `LlmUnavailableError`, an uncaught
+  `AttributeError`/`TypeError` reaching the pipeline), but **low current
+  blast radius**: neither provider is the configured production provider
+  (`LLM_PROVIDER=nvidia`), so this was never actually reachable in normal
+  operation. Found only because Phase 1 deliberately checked whether the
+  hard-deadline fix from NVDA-01 had been applied consistently across the
+  whole provider abstraction — it had not, and checking why surfaced
+  this.
+- **Area:** Phase 1 — provider abstraction consistency / Phase 3 — LLM
+  boundary
+- **Status:** FIXED (session 2, 2026-09-22)
+- **Description — OpenAIProvider:** `classify_event`/`summarize_event`/
+  `is_same_event` called `self.client.beta.chat.completions.parse(...)`,
+  the OpenAI SDK's structured-output helper. Verified directly against
+  the installed `openai==1.12.0` (the exact version pinned in
+  `requirements.txt`): `client.beta` has no `.chat` attribute at all in
+  this version (`dir(client.beta)` → `['assistants', 'threads',
+  'with_raw_response', 'with_streaming_response']`) — that helper was
+  added in a later SDK release. Every real call would have raised
+  `AttributeError: 'Beta' object has no attribute 'chat'` immediately,
+  before any network request. Zero existing test coverage exercised this
+  — the only pre-existing tests touching `OpenAIProvider` checked
+  `isinstance()` after construction, never called its methods against a
+  real or equivalently-shaped client.
+- **Description — AnthropicProvider (a second, independent bug, found
+  while fixing the first):** `_complete_json` unconditionally passed
+  `temperature=0` to `self.client.messages.create(...)`. Verified
+  directly against the installed `anthropic==1.7.0`: `temperature` is
+  absent from the real method's parameter list entirely
+  (`inspect.signature` → `max_tokens, messages, model, cache_control,
+  container, inference_geo, metadata, output_config, service_tier,
+  stop_sequences, stream, system, thinking, tool_choice, tools, ...` — no
+  `temperature`). Every real call would have raised `TypeError:
+  Messages.create() got an unexpected keyword argument 'temperature'`.
+  Also unrelated to but discovered alongside: the installed SDK is built
+  on `httpx2` (a separate package from `httpx`, same author/lineage,
+  different module) and rejects a raw `httpx.Client` passed as
+  `http_client` with an explicit, well-designed error message naming the
+  mismatch — not a bug, just a real compatibility detail that had to be
+  worked around in this session's own regression test.
+- **Why this was invisible:** both providers are reachable only via
+  `LLM_PROVIDER=openai`/`LLM_PROVIDER=anthropic`, neither of which this
+  product's actual configuration uses (`nvidia` is both the default and
+  the only one exercised by the live test suite). `anthropic` isn't even
+  in `requirements.txt` (optional, imported behind `try/except
+  ImportError`). No test in the inherited suite called either provider's
+  real methods against a real (or realistically-mocked-at-the-right-level)
+  client — the gap in test depth, not the gap in code review, is the
+  actual root cause of both bugs surviving this long.
+- **Fix:** `OpenAIProvider` rewritten to use the same manual
+  JSON-schema-in-prompt + `response_format={"type": "json_object"}` +
+  `parse_structured()` pattern already proven working in
+  `NVIDIAProvider`/`AnthropicProvider`, rather than depending on the
+  SDK's structured-parse helper at all — this fixes the immediate bug
+  *and* removes the coupling to an exact pinned SDK version that caused
+  it, and gives `OpenAIProvider` its own real `classify_relationship`
+  override (previously relying on the base class's `is_same_event`-
+  wrapping default) for consistency with the other two providers.
+  `AnthropicProvider`: dropped the unsupported `temperature=0` argument
+  (correctness comes from the Pydantic schema validation in
+  `parse_structured()`, not from temperature — dropping it is not a
+  meaningful behavior change). Both providers also gained the same hard
+  wall-clock deadline treatment as `NVIDIAProvider` (`call_with_hard_deadline`,
+  `OPENAI_REQUEST_DEADLINE_SECONDS = 75.0`,
+  `ANTHROPIC_REQUEST_DEADLINE_SECONDS = 100.0`) — the actual Phase 1
+  audit item that led to finding both bugs in the first place.
+- **Cleanup:** `EquivalenceCheck`/`EQUIVALENCE_SYSTEM_PROMPT` and their
+  branch in `coerce_structured_payload` removed — they became genuinely
+  dead code as a direct result of this fix (only `OpenAIProvider`'s old
+  implementation used them), not pre-existing dead code left untouched.
+- **Regression tests:** `backend/tests/test_provider_timeout_bound_openai_anthropic.py`
+  (2 tests) — proves both providers' hard deadlines bound a real call
+  against a trickling fake transport (reusing `TrickleTransport` for
+  OpenAI; a second transport class built on `httpx2` for Anthropic,
+  since the installed SDK rejects `httpx.Client` outright — discovered by
+  construction, not assumed). Both tests exercise the *actual* rewritten
+  code paths, so they would have caught both original bugs immediately
+  (confirmed: re-running them against the pre-fix code reproduces the
+  `AttributeError` and `TypeError` respectively).
+- **Full suite after fix:** 357 passed, 0 failed (up from 355 — the 2 new
+  tests). `anthropic` package was installed into the working venv purely
+  to make this verification possible (it is optional and intentionally
+  **not** added to `requirements.txt` — the code's own
+  `try/except ImportError` handling is the correct contract for an
+  optional provider, not a hard dependency).
+- **Neighboring attack:** this raises a real process question worth
+  carrying forward, not just a code fix — an optional/non-default code
+  path (any `LLM_PROVIDER` other than `nvidia`) has no live-call
+  regression coverage the way NVIDIA does, so a *third* SDK-compatibility
+  break in either provider could reappear undetected the next time either
+  SDK is upgraded. Worth deciding, in a later phase, whether OpenAI/
+  Anthropic deserve the same kind of live-call test tier NVIDIA has
+  (gated behind their own API keys) or whether a lighter-weight
+  "construct + call against a real SDK object with a fake transport"
+  test (what this session added) is judged sufficient given they're not
+  production-critical.
+
 ### CORS-01 — Wildcard CORS origin combined with credentials enabled
 - **Severity:** Low today, escalates to Medium/High if session auth is
   ever added without revisiting this

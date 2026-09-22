@@ -335,16 +335,44 @@ were found and fixed (all confirmed via reproduction before and after):
   fresh-venv-from-file-alone-and-retest for completeness. Both passed
   350/0.
 
+#### Phase 1 progress (architecture audit), session 2 continued
+- **`CORS-01`** fixed (see Open findings above) — verified with a live
+  browser session against both real servers (also incidentally
+  re-confirmed the Phase 0 session 1 `AdminSource` typing fix and the
+  home/detail feed both render real data correctly end-to-end).
+- **Provider abstraction consistency audit**: checked whether the NVDA-01
+  hard-deadline fix had been applied uniformly across all three real LLM
+  providers. It hadn't — `OpenAIProvider` and `AnthropicProvider` still
+  had the original unbounded-timeout weakness. Fixing that consistency
+  gap surfaced two **independent, real, previously-invisible bugs**:
+  `OpenAIProvider` called an OpenAI SDK method
+  (`.beta.chat.completions.parse`) that does not exist in the pinned
+  `openai==1.12.0` — every real call would have crashed with
+  `AttributeError`. `AnthropicProvider` passed a `temperature=` argument
+  the installed `anthropic` SDK's `Messages.create()` does not accept —
+  every real call would have crashed with `TypeError`. Both `FIXED` (see
+  `docs/RED_TEAM_REPORT.md` `OPENAI-BROKEN-01` for full detail,
+  reproduction, and fix). Neither provider is the configured production
+  provider, so neither bug was ever reachable in normal operation — but
+  both were completely invisible to the inherited test suite, which is
+  the part worth sitting with: a provider abstraction is only as trustworthy
+  as its least-tested implementation, and "not production" had let real
+  breakage go unnoticed indefinitely.
+- Full deterministic suite after all of the above: **357 passed, 0
+  failed** (13 skipped, unchanged).
+
 #### Not yet started (honest scope statement, end of session 2)
-Phase 1 (architecture audit) is starting now, in this same session, per
-the instruction to continue autonomously. First Phase 1 action taken:
-`CORS-01` fix (see above), verified with a live browser session against
-both real servers (also incidentally re-confirmed the Phase 0 session 1
-`AdminSource` typing fix and the home/detail feed both render real data
-correctly end-to-end). Everything else in Phases 2–22 not already
-covered above remains not started — same list as the end of session 1,
-minus the documentation rewrite (now done) and the
-concurrency/failure-injection/API-pollution/CORS findings (now fixed).
+Everything else in Phases 2–22 not already covered above remains not
+started — same list as the end of session 1, minus the documentation
+rewrite (now done) and the concurrency/failure-injection/
+API-pollution/CORS/provider-consistency findings (now fixed). Deferred
+even within Phase 1: the "does OpenAI/Anthropic deserve a live-call test
+tier" process question raised in `OPENAI-BROKEN-01`'s neighboring-attack
+note; the scheduler's lack of an outer wall-clock budget for a full
+ingestion cycle (raised in NVDA-01's neighboring-attack note); deep
+transaction-boundary review of `pipeline.py`'s retry loop; the
+unbounded-`skip`-parameter pagination DoS already flagged (as a
+deliberately-accepted `KNOWN LIMITATION`) in `test_api_adversarial.py`.
 
 This session also survived two environment interruptions (a usage-limit
 restore and a machine crash/restart) mid-work. Both times: verified git

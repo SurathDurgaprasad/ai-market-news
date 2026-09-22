@@ -8,7 +8,6 @@ from app.core.providers.llm import (
     NVIDIAProvider,
     CLASSIFY_SYSTEM_PROMPT,
     SUMMARIZE_SYSTEM_PROMPT,
-    EQUIVALENCE_SYSTEM_PROMPT,
     extract_json_object,
     parse_structured,
     nvidia_error_is_retryable,
