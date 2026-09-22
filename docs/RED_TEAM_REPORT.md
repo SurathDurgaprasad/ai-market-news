@@ -18,6 +18,98 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### ORIGIN-PSL-01 — Provenance evidence silently lost for public-suffix (`.co.uk`-style) publishers and nested JSON-LD publisher objects
+- **Severity:** Medium (correctness/data-quality — both failure modes are
+  fail-closed: legitimate provenance evidence is discarded, not falsely
+  trusted; no trust-escalation path was demonstrated through either)
+- **Area:** Phase 1B, second attack pass, Area A (provenance / source
+  identity red team), items 2/7 (publisher-declaration conflicts) and 14
+  (subdomain vs registrable-domain boundary / lookalike domains)
+- **Status:** `CONFIRMED`, `FIXED`
+- **Description — two independent defects found in `app/core/origin.py`
+  during reconnaissance (not manufactured; both reproduced directly
+  against the pre-fix code before any change was made):**
+  1. **`same_registrable_host()` had no public-suffix awareness.** It
+     compared only the last two dot-separated labels of each host. For
+     any host sitting under a multi-label public suffix (`.co.uk`,
+     `.com.au`, `.co.jp`, etc. — a huge share of real-world regional news
+     publishers), this collapses every distinct site under that suffix
+     to the same tuple: `bbc.co.uk` and `evil.co.uk` both reduce to
+     `("co", "uk")` and compared equal. Verified directly:
+     `same_registrable_host("bbc.co.uk", "evil.co.uk")` returned `True`
+     before the fix. The function's only call site gates the
+     aggregator-to-official promotion check (`different_site` in
+     `resolve_originating_source`), so a false "same site" result
+     suppresses promotion — the practical effect is that a legitimate
+     `.co.uk`/`.com.au`/`.co.jp`-style publisher, reached via an
+     aggregator (Hacker News, Google News) with genuine on-page evidence
+     (og:site_name/JSON-LD), silently fails to get promoted to
+     `official_name`/`official_url`, because the code wrongly believes
+     the aggregator and the publisher are "the same site." This is a
+     fail-closed failure (lost detection, not false trust), but a real
+     and previously-untested one, affecting a large class of real
+     publishers.
+  2. **`_JSONLD_PUBLISHER` regex could not see past one nested object.**
+     The pattern used `[^}]*` between `"publisher": {` and `"name"`,
+     which stops at the first `}`. Real-world schema.org
+     Organization/Publisher JSON-LD very commonly nests a `"logo": {...}`
+     object before `"name"` — that nested object's own closing brace
+     terminated the match early, so the regex found nothing even though
+     valid publisher evidence was present on the page. Verified directly:
+     `extract_publisher_from_html()` against a JSON-LD publisher object
+     with a nested `logo` before `name` returned `""` before the fix,
+     `"Real Publisher Corp"` after.
+- **Explicitly NOT re-litigated:** the existing, already-accepted
+  `test_origin_aggregator_to_official_with_fake_og_site_name` tradeoff
+  (an attacker-controlled page's self-reported `og:site_name` is trusted
+  as the official display name, while `official_url` correctly stays the
+  real URL) is a pre-existing, deliberate design tradeoff, not a fresh
+  defect — left unchanged. Likewise, `extract_publisher_from_html()`'s
+  precedence rule (og:site_name unconditionally wins over a conflicting
+  JSON-LD publisher, because JSON-LD is only consulted when no
+  og:site_name matched at all) is deterministic, intentional-shaped
+  behavior of the same class as the accepted tradeoff above — not
+  reclassified as a new defect, but now locked in by an explicit
+  regression test (`test_og_site_name_still_wins_over_conflicting_jsonld_publisher`)
+  so it's a tested contract instead of incidental code order.
+- **Fix (`backend/app/core/origin.py`):**
+  - `same_registrable_host()`: added a small, explicit, hardcoded set of
+    common multi-label public suffixes (`_MULTI_LABEL_PUBLIC_SUFFIXES` —
+    UK/JP/KR/NZ/ZA/AU/BR/MX/IN/IL/ID/SG/HK ccTLD second-levels). When a
+    host's last two labels match one of these AND it has 3+ labels total,
+    comparison uses the last **three** labels instead of two. This is
+    deliberately **not** a full Public Suffix List implementation — no
+    new dependency was added (`tldextract`/`publicsuffix2` are not
+    currently installed); it covers the suffixes real news publishers are
+    most likely to sit under, consistent with this file's existing style
+    of explicit, bounded sets (`AGGREGATOR_HOSTS`). A host under an
+    uncovered public suffix still falls back to the pre-existing
+    last-2-labels heuristic, unchanged.
+  - `_JSONLD_PUBLISHER`: widened to
+    `"publisher"\s*:\s*\{(?:[^{}]|\{[^{}]*\})*?"name"\s*:\s*"([^"]+)"` —
+    tolerates exactly one level of nested `{...}` between `publisher` and
+    `name` (covers the common `logo`-before-`name` shape) while remaining
+    a regex heuristic, not a JSON parser; deeper nesting remains an
+    accepted, documented limitation rather than a claimed-complete fix.
+- **Regression tests (`backend/tests/test_origin_attacks.py`):**
+  - `test_lookalike_domain_under_shared_public_suffix_is_not_same_site` —
+    direct reproduction of the `same_registrable_host` bug plus the
+    subdomain-still-matches contrast case.
+  - `test_aggregator_to_lookalike_couk_publisher_still_promotes_correctly`
+    — end-to-end through `resolve_originating_source`, proving a real
+    `.co.uk` publisher reached via an aggregator now promotes correctly.
+  - `test_jsonld_publisher_with_nested_logo_object_is_extracted` — direct
+    reproduction of the regex bug.
+  - `test_jsonld_publisher_name_before_nested_logo_still_extracted` —
+    neighboring case (name before the nested object) proving the widened
+    pattern didn't regress the simple case.
+  - `test_og_site_name_still_wins_over_conflicting_jsonld_publisher` —
+    locks in the existing precedence rule as an explicit contract.
+  - All pre-existing provenance tests (`test_origin_attacks.py`,
+    `test_origin_and_entities.py`, 15 tests) still pass unchanged.
+- **Full suite after fix:** 409 passed, 24 skipped, 0 failed (baseline
+  was 401 passed / 24 skipped before this finding's 8 new tests).
+
 ### INGEST-SILENT-01 — A feed URL serving an HTML page instead of a feed was recorded "healthy" forever
 - **Severity:** Medium (correctness/observability — the same class of
   defect as SCHED-OUTAGE-01, one layer earlier: a persistently broken

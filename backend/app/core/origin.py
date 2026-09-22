@@ -38,9 +38,29 @@ _OG_SITE = (
 )
 
 _JSONLD_PUBLISHER = re.compile(
-    r'"publisher"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"',
+    r'"publisher"\s*:\s*\{(?:[^{}]|\{[^{}]*\})*?"name"\s*:\s*"([^"]+)"',
     re.IGNORECASE,
 )
+
+# Not a full Public Suffix List (no dependency added for it) — the
+# multi-label suffixes real-world news publishers are most likely to sit
+# under. Anything else falls back to the last-2-labels heuristic below,
+# which is correct for the common case (.com/.org/.net/single-label TLDs).
+_MULTI_LABEL_PUBLIC_SUFFIXES = {
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "ltd.uk", "plc.uk",
+    "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp",
+    "co.kr", "or.kr", "ne.kr",
+    "co.nz", "org.nz", "govt.nz", "ac.nz",
+    "co.za", "org.za", "gov.za",
+    "com.au", "net.au", "org.au", "gov.au", "edu.au",
+    "com.br", "net.br", "org.br", "gov.br",
+    "com.mx", "gob.mx",
+    "co.in", "net.in", "org.in", "gov.in", "ac.in",
+    "co.il", "org.il", "gov.il",
+    "co.id", "or.id", "go.id",
+    "com.sg", "gov.sg", "edu.sg",
+    "com.hk", "gov.hk", "org.hk", "edu.hk",
+}
 
 
 class OriginResolution(NamedTuple):
@@ -74,8 +94,22 @@ def is_aggregator_source(name: Optional[str], url: Optional[str]) -> bool:
 
 
 def same_registrable_host(a: str, b: str) -> bool:
+    """
+    Compare registrable domains, not raw hostnames, so `blog.example.com`
+    and `example.com` count as the same site.
+
+    A naive last-2-labels comparison breaks for hosts under a multi-label
+    public suffix (`.co.uk`, `.com.au`, ...): `bbc.co.uk` and `evil.co.uk`
+    both reduce to `("co", "uk")` and would wrongly compare equal, even
+    though `.co.uk` is a public suffix, not a registrable domain, and
+    these are two unrelated sites. Reproduced directly against this
+    function before fixing. See docs/RED_TEAM_REPORT.md for the finding
+    this fix addresses.
+    """
     def parts(host: str) -> tuple[str, ...]:
         bits = [p for p in host.lower().removeprefix("www.").split(".") if p]
+        if len(bits) >= 3 and ".".join(bits[-2:]) in _MULTI_LABEL_PUBLIC_SUFFIXES:
+            return tuple(bits[-3:])
         return tuple(bits[-2:]) if len(bits) >= 2 else tuple(bits)
 
     pa, pb = parts(a), parts(b)

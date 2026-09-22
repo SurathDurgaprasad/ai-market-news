@@ -612,3 +612,55 @@ dedicated existing test files (`test_origin_attacks.py`,
 (scheduler fairness / whole-cycle budget) remains the same `OPEN FINDING`
 from Phase 1A — still not fixed, still deliberately not fixed without
 real measurement first.
+
+### Session 5: Phase 1B, second attack pass (checkpoint `a97efcf`)
+
+Explicit continuation from `a97efcf` (401 passed / 0 failed / 24 skipped)
+targeting the 5 areas the previous Phase 1B session left insufficiently
+attacked, in mandated order: A) provenance, B) duplicate ingestion,
+C) database integrity, D) article_body enrichment path, E) scheduler
+whole-cycle budget.
+
+#### Area A — Provenance / source identity red team: `ORIGIN-PSL-01` — `CONFIRMED`, `FIXED`
+
+Reconnaissance first (per instruction): read `test_origin_attacks.py`
+(3 tests) and `test_origin_and_entities.py` (12 tests) in full before
+writing anything new, specifically to avoid duplicating existing
+coverage. Found that the existing suite already documents one
+`og:site_name`-trust tradeoff as an accepted `KNOWN LIMITATION` —
+deliberately did **not** re-litigate that; it's pre-existing and
+unchanged.
+
+Found two genuinely new, previously-untested defects by reading
+`origin.py` closely and reproducing each directly before touching code:
+
+1. `same_registrable_host()` used a naive last-2-labels comparison with
+   no public-suffix awareness. Verified directly:
+   `same_registrable_host("bbc.co.uk", "evil.co.uk")` returned `True`
+   pre-fix — both collapse to `("co", "uk")`. Since `.co.uk` is a public
+   suffix, not a registrable domain, this wrongly treated any two
+   unrelated `.co.uk`/`.com.au`/`.co.jp`-style sites as "the same site."
+   Practical effect (fail-closed, not fail-open): legitimate provenance
+   promotion for a large class of real regional publishers, reached via
+   an aggregator with genuine on-page evidence, was silently suppressed.
+2. `_JSONLD_PUBLISHER`'s regex used `[^}]*` between `publisher": {` and
+   `"name"`, which stops at the first `}`. A `"logo": {...}` object
+   nested before `"name"` — an extremely common real schema.org shape —
+   terminated the match early. Verified directly: returned `""` for a
+   publisher object with a nested logo before name, pre-fix.
+
+Both fixed without new dependencies (no PSL library added — a small,
+explicit hardcoded set of common multi-label suffixes, matching this
+file's existing `AGGREGATOR_HOSTS`-style pattern; regex widened to
+tolerate one level of nesting, not converted to a full JSON parser).
+5 new regression/attack tests added to `test_origin_attacks.py`
+(lookalike-domain reproduction, end-to-end promotion contrast case,
+nested-JSON-LD reproduction, neighboring name-before-logo case, and an
+explicit lock-in test for the existing og-vs-JSON-LD precedence rule so
+it's a tested contract rather than incidental code order). Full details
+and severity reasoning in `docs/RED_TEAM_REPORT.md` (`ORIGIN-PSL-01`).
+
+Full deterministic suite after Area A: **409 passed, 0 failed, 24
+skipped** (up from 401 — 8 new tests, all passing, no regressions).
+
+Next: Area B (duplicate ingestion red team) — not yet started.
