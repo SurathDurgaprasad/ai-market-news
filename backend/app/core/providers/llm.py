@@ -61,6 +61,48 @@ def call_with_hard_deadline(fn, *args, deadline_seconds: float, **kwargs):
         ) from exc
 
 
+def _with_operation_deadline(deadline_attr: str):
+    """
+    Three-layer timeout model, each layer answering a different question:
+
+      1. SDK/request timeout  — the client constructor's own timeout=
+         (e.g. openai.OpenAI(timeout=...)). Bounds the gap between I/O
+         events on ONE HTTP connection. Does NOT bound total duration
+         (see ProviderRequestTimeout's docstring / NVDA-01).
+      2. Retry budget          — tenacity's @retry (stop_after_attempt +
+         wait_exponential). Bounds how many times a transient failure is
+         retried, with backoff between attempts.
+      3. Operation deadline    — THIS layer. An absolute wall-clock
+         ceiling on the WHOLE logical call (classify_event/
+         summarize_event/classify_relationship), inclusive of every
+         retry attempt inside it. Layers 1+2 alone only give an *implicit*
+         worst case (attempts x per-attempt deadline + backoff) that
+         silently grows if either constant is retuned later; this layer
+         makes the total ceiling an explicit, independently-set number
+         per provider — e.g. OpenAI (the fast development/live-validation
+         provider) gets a short operation deadline so a bad call fails
+         fast during iteration, while NVIDIA (production) keeps a
+         generous one matching its existing real-world latency.
+
+    Applied as the layer directly inside `_unavailable_on_any_error` (so
+    a deadline breach still normalizes to LlmUnavailableError) and
+    outside `@retry` (so it bounds ALL attempts combined, not one).
+    `deadline_attr` names the instance attribute holding this provider's
+    operation deadline in seconds, so each provider can tune its own.
+    """
+    import functools
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            deadline = getattr(self, deadline_attr)
+            return call_with_hard_deadline(fn, self, *args, deadline_seconds=deadline, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def _unavailable_on_any_error(fn):
     """
     Keep the LLMProvider contract airtight: every real classify_event /
@@ -265,7 +307,18 @@ def _credential_present(value: Optional[str]) -> bool:
 
 
 def provider_is_configured(name: Optional[str] = None) -> bool:
-    """True if the named production provider has a non-empty API key. Never returns the key."""
+    """True if the named production provider has enough config to attempt
+    construction. Never returns a credential value.
+
+    For API-key providers (nvidia/openai/anthropic) this means a non-empty
+    key. For bedrock, AWS's credential model is different — a bearer API
+    key is not how it authenticates (env vars, ~/.aws/credentials, an IAM
+    role, or SSO all resolve at call time, not construction time) — so
+    "configured" means the two pieces of config with no sensible default
+    (model ID and region) are present; actual credential validity is
+    discovered on the first real call and normalized to
+    LlmUnavailableError like any other provider failure.
+    """
     from app.core.config import settings
     chosen = (name or configured_llm_provider_name()).strip().lower()
     if chosen == "nvidia":
@@ -274,6 +327,8 @@ def provider_is_configured(name: Optional[str] = None) -> bool:
         return _credential_present(settings.OPENAI_API_KEY) or _credential_present(os.environ.get("OPENAI_API_KEY"))
     if chosen == "anthropic":
         return _credential_present(settings.ANTHROPIC_API_KEY) or _credential_present(os.environ.get("ANTHROPIC_API_KEY"))
+    if chosen == "bedrock":
+        return _credential_present(settings.BEDROCK_MODEL_ID) and _credential_present(settings.AWS_REGION)
     return False
 
 
@@ -293,7 +348,7 @@ def resolve_llm_mode(explicit: Optional[str] = None) -> str:
         return LLM_UNAVAILABLE
     if is_test_runtime() and explicit is None:
         return LLM_TEST
-    if explicit in (None, LLM_PRODUCTION, "nvidia", "openai", "anthropic"):
+    if explicit in (None, LLM_PRODUCTION, "nvidia", "openai", "anthropic", "bedrock"):
         if is_test_runtime() and explicit is None:
             return LLM_TEST
         name = configured_llm_provider_name() if explicit in (None, LLM_PRODUCTION) else explicit
@@ -446,15 +501,25 @@ def nvidia_error_is_fatal_model(exc: BaseException) -> bool:
     return getattr(exc, "status_code", None) in (404, 410)
 
 
-# Hard ceilings on a single raw HTTP attempt, independent of each SDK's
-# own timeout= (which only bounds per-phase I/O gaps, not total call
-# duration — see ProviderRequestTimeout's docstring above, and
+# Hard ceilings on a single raw HTTP attempt (layer 1), independent of
+# each SDK's own timeout= (which only bounds per-phase I/O gaps, not
+# total call duration — see ProviderRequestTimeout's docstring above, and
 # docs/RED_TEAM_REPORT.md NVDA-01 for the incident and proof that
-# motivated this). Applied uniformly across all three real providers so
-# the abstraction actually behaves consistently, not just the one
+# motivated this), and on the whole retried operation (layer 3 — see
+# _with_operation_deadline). Applied uniformly across all real providers
+# so the abstraction actually behaves consistently, not just the one
 # provider that happened to get red-teamed first.
-OPENAI_REQUEST_DEADLINE_SECONDS = 75.0
+#
+# OpenAI is deliberately tight: per PROVIDER-AGNOSTIC-01
+# (docs/RED_TEAM_REPORT.md), OpenAI is this project's fast development/
+# live-semantic-validation provider — a slow or stuck call should fail
+# quickly during iteration rather than eat minutes the way a live NVIDIA
+# call was observed to. NVIDIA (the configured production provider)
+# keeps its existing, more generous budget unchanged.
+OPENAI_REQUEST_DEADLINE_SECONDS = 30.0
+OPENAI_OPERATION_DEADLINE_SECONDS = 60.0
 ANTHROPIC_REQUEST_DEADLINE_SECONDS = 100.0
+ANTHROPIC_OPERATION_DEADLINE_SECONDS = 330.0
 
 
 class OpenAIProvider(LLMProvider):
@@ -487,12 +552,14 @@ class OpenAIProvider(LLMProvider):
         model: Optional[str] = None,
         http_client=None,
         request_deadline_seconds: float = OPENAI_REQUEST_DEADLINE_SECONDS,
+        operation_deadline_seconds: float = OPENAI_OPERATION_DEADLINE_SECONDS,
     ):
         import openai
         from app.core.config import settings
         key = api_key or settings.OPENAI_API_KEY
         self.model = model or settings.OPENAI_MODEL
         self.request_deadline_seconds = request_deadline_seconds
+        self.operation_deadline_seconds = operation_deadline_seconds
         self.client = (
             openai.OpenAI(api_key=key, timeout=60.0, http_client=http_client)
             if key
@@ -523,6 +590,7 @@ class OpenAIProvider(LLMProvider):
         return parse_structured(completion.choices[0].message.content or "", model_cls)
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
@@ -540,6 +608,7 @@ class OpenAIProvider(LLMProvider):
             return None
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
@@ -557,6 +626,7 @@ class OpenAIProvider(LLMProvider):
             return None
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
@@ -595,8 +665,13 @@ ProductionLLMProvider = OpenAIProvider
 # see OPENAI_REQUEST_DEADLINE_SECONDS/ANTHROPIC_REQUEST_DEADLINE_SECONDS
 # above — since it's the actual configured production provider and its
 # hosted 20B model can legitimately run slower under load than a
-# frontier hosted API.
+# frontier hosted API. NVIDIA_OPERATION_DEADLINE_SECONDS is set generously
+# above the pre-existing implicit worst case (3 attempts x 100s + backoff
+# ~= 304s) specifically so this refactor does not change NVIDIA's observed
+# behavior — see PROVIDER-AGNOSTIC-01 in docs/RED_TEAM_REPORT.md ("NVIDIA
+# behavior remains unchanged except for the improved contract").
 NVIDIA_REQUEST_DEADLINE_SECONDS = 100.0
+NVIDIA_OPERATION_DEADLINE_SECONDS = 330.0
 
 
 class NVIDIAProvider(LLMProvider):
@@ -614,6 +689,7 @@ class NVIDIAProvider(LLMProvider):
         base_url: Optional[str] = None,
         http_client=None,
         request_deadline_seconds: float = NVIDIA_REQUEST_DEADLINE_SECONDS,
+        operation_deadline_seconds: float = NVIDIA_OPERATION_DEADLINE_SECONDS,
     ):
         import openai
         from app.core.config import settings
@@ -621,6 +697,7 @@ class NVIDIAProvider(LLMProvider):
         self.model = model or settings.NVIDIA_MODEL
         self.base_url = (base_url or settings.NVIDIA_BASE_URL or "https://integrate.api.nvidia.com/v1").rstrip("/")
         self.request_deadline_seconds = request_deadline_seconds
+        self.operation_deadline_seconds = operation_deadline_seconds
         self.client = (
             openai.OpenAI(
                 api_key=key,
@@ -694,6 +771,7 @@ class NVIDIAProvider(LLMProvider):
         raise ValueError("NVIDIA returned no parseable JSON object")
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -713,6 +791,7 @@ class NVIDIAProvider(LLMProvider):
             return None
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -732,6 +811,7 @@ class NVIDIAProvider(LLMProvider):
             return None
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -771,11 +851,13 @@ class AnthropicProvider(LLMProvider):
         model: Optional[str] = None,
         http_client=None,
         request_deadline_seconds: float = ANTHROPIC_REQUEST_DEADLINE_SECONDS,
+        operation_deadline_seconds: float = ANTHROPIC_OPERATION_DEADLINE_SECONDS,
     ):
         from app.core.config import settings
         key = api_key or settings.ANTHROPIC_API_KEY
         self.model = model or settings.ANTHROPIC_MODEL
         self.request_deadline_seconds = request_deadline_seconds
+        self.operation_deadline_seconds = operation_deadline_seconds
         self.client = None
         if not key:
             return
@@ -809,6 +891,7 @@ class AnthropicProvider(LLMProvider):
         return parse_structured(text, model_cls)
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -826,6 +909,7 @@ class AnthropicProvider(LLMProvider):
             return None
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -843,6 +927,7 @@ class AnthropicProvider(LLMProvider):
             return None
 
     @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=20),
         stop=stop_after_attempt(3),
@@ -867,6 +952,253 @@ class AnthropicProvider(LLMProvider):
             return RelationshipResult(relationship=rel, reasoning=raw.reasoning)
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("Anthropic classify_relationship unparseable; treating as different events")
+            return RelationshipResult.different()
+
+    def is_same_event(self, content: str, event_summary: str, context: Optional[str] = None) -> bool:
+        return self.classify_relationship(content, event_summary, context).is_merge()
+
+
+BEDROCK_REQUEST_DEADLINE_SECONDS = 100.0
+BEDROCK_OPERATION_DEADLINE_SECONDS = 330.0
+
+
+def _botocore_client_error_code(exc: BaseException) -> Optional[str]:
+    """
+    botocore raises dynamically-generated, service-specific exception
+    subclasses (e.g. `botocore.errorfactory.ThrottlingException`), not
+    literally `botocore.exceptions.ClientError` by type name — verified
+    directly with `botocore.stub.Stubber` (no live AWS access needed for
+    this): `type(exc).__name__` is the error code itself, and the class
+    inherits from ClientError rather than being named it. An earlier
+    version of the three classifiers below checked
+    `type(exc).__name__ == "ClientError"`, which never matches a real
+    botocore error and would have silently classified every real Bedrock
+    ClientError as unknown/non-retryable. Caught and fixed before this
+    ever shipped, precisely by using Stubber to check rather than assume.
+    """
+    try:
+        import botocore.exceptions
+    except ImportError:
+        return None
+    if isinstance(exc, botocore.exceptions.ClientError):
+        return exc.response.get("Error", {}).get("Code", "")
+    return None
+
+
+def bedrock_error_is_retryable(exc: BaseException) -> bool:
+    """
+    Transient AWS/network failures. The error-code list is best-effort —
+    written against Bedrock's documented ClientError codes, not verified
+    against real AWS traffic (this sandbox has no AWS credentials, see
+    BedrockProvider's docstring) — but the CLASSIFICATION MECHANISM
+    (isinstance against botocore.exceptions.ClientError, not a type-name
+    string match) is verified against real botocore exception objects via
+    Stubber. Precision of the code list only affects how many times
+    tenacity retries; a misclassified error still correctly becomes
+    LlmUnavailableError at the _unavailable_on_any_error boundary either
+    way, just with fewer retries than ideal.
+    """
+    name = type(exc).__name__
+    if name in {"ConnectTimeoutError", "ReadTimeoutError", "EndpointConnectionError", "ConnectionError"}:
+        return True
+    code = _botocore_client_error_code(exc)
+    if code is not None:
+        return code in {
+            "ThrottlingException", "ServiceUnavailableException",
+            "ModelTimeoutException", "InternalServerException",
+            "TooManyRequestsException",
+        }
+    return False
+
+
+def bedrock_error_is_fatal_auth(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if name in {"NoCredentialsError", "PartialCredentialsError", "UnauthorizedSSOTokenError"}:
+        return True
+    code = _botocore_client_error_code(exc)
+    if code is not None:
+        return code in {"AccessDeniedException", "UnrecognizedClientException"}
+    return False
+
+
+def bedrock_error_is_fatal_model(exc: BaseException) -> bool:
+    """Unknown/inaccessible model ID. Do not retry."""
+    code = _botocore_client_error_code(exc)
+    if code is not None:
+        return code in {"ResourceNotFoundException", "ValidationException"}
+    return False
+
+
+class BedrockProvider(LLMProvider):
+    """
+    Amazon Bedrock, targeting Anthropic Claude models hosted on Bedrock
+    via the `bedrock-runtime` `invoke_model` API (AWS's documented
+    request/response shape for Anthropic models on Bedrock:
+    `anthropic_version` + `system` + `messages` in the request body,
+    `content` blocks in the response — the same schema-in-prompt +
+    Pydantic-validation pattern as every other provider here, just over
+    boto3 instead of an HTTP client library).
+
+    Bedrock hosts multiple model families (Anthropic, Amazon Titan/Nova,
+    Meta Llama, Mistral, ...) with DIFFERENT invoke_model request/response
+    shapes. This provider deliberately targets only the Anthropic-model
+    shape — the most common production Bedrock use case, and a
+    well-documented, stable AWS API — rather than trying to abstract over
+    every possible hosted model family in one implementation.
+
+    HONESTY NOTE (explicitly permitted by the task that added this: "seams
+    should be fully prepared if credentials/SDK verification cannot be
+    performed yet"): this sandbox has no AWS credentials or Bedrock
+    access. What IS verified: construction with a fake region/model,
+    missing-credential and missing-config failure paths, and
+    botocore.stub.Stubber-simulated request/response/error handling (a
+    real boto3 mechanism for testing against realistic botocore
+    responses without live AWS access or network calls) — see
+    tests/test_bedrock_provider.py. What is NOT verified: an actual
+    successful call against the real Bedrock API. Do not read passing
+    tests here as proof of live Bedrock correctness — see
+    docs/RED_TEAM_REPORT.md PROVIDER-AGNOSTIC-01 for the explicit
+    verified/not-verified split.
+    """
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        region_name: Optional[str] = None,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        client=None,
+        request_deadline_seconds: float = BEDROCK_REQUEST_DEADLINE_SECONDS,
+        operation_deadline_seconds: float = BEDROCK_OPERATION_DEADLINE_SECONDS,
+    ):
+        from app.core.config import settings
+        self.model = model or settings.BEDROCK_MODEL_ID
+        self.request_deadline_seconds = request_deadline_seconds
+        self.operation_deadline_seconds = operation_deadline_seconds
+        self.client = None
+        region = region_name or settings.AWS_REGION
+        if not (self.model and region):
+            # No sensible default model/region — construction without
+            # them is a configuration error, not a runtime-discoverable
+            # credential problem, so this fails at construction time
+            # rather than waiting for the first call.
+            return
+        if client is not None:
+            self.client = client
+            return
+        try:
+            import boto3
+            kwargs = {"region_name": region}
+            # AWS credentials are intentionally NOT required here: boto3's
+            # default credential chain (env vars, ~/.aws/credentials, an
+            # IAM role, SSO) is the normal, correct way to authenticate.
+            # Explicit keys are only passed through if given — never
+            # required, matching "fail clearly" being about the ACTUAL
+            # AWS call failing with a clear NoCredentialsError (normalized
+            # to LlmUnavailableError below), not this constructor guessing
+            # whether some credential source will work.
+            if aws_access_key_id and aws_secret_access_key:
+                kwargs["aws_access_key_id"] = aws_access_key_id
+                kwargs["aws_secret_access_key"] = aws_secret_access_key
+            self.client = boto3.client("bedrock-runtime", **kwargs)
+        except ImportError:
+            logger.error("LLM_PROVIDER=bedrock but the boto3 package is not installed")
+
+    def _invoke(self, body: dict):
+        import json as _json
+        return call_with_hard_deadline(
+            self.client.invoke_model,
+            deadline_seconds=self.request_deadline_seconds,
+            modelId=self.model,
+            body=_json.dumps(body),
+            contentType="application/json",
+            accept="application/json",
+        )
+
+    def _complete_json(self, system: str, user: str, model_cls: Type[T]) -> T:
+        if not self.client:
+            raise LlmUnavailableError("Bedrock client not initialized (missing model/region config)")
+        schema = model_cls.model_json_schema()
+        sys_content = (
+            system
+            + "\nReturn ONLY a JSON object that validates against this JSON Schema. "
+            + "No markdown, no commentary.\n"
+            + json.dumps(schema)
+        )
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "system": sys_content,
+            "messages": [{"role": "user", "content": user}],
+        }
+        response = self._invoke(body)
+        response_body = json.loads(response["body"].read())
+        blocks = response_body.get("content", [])
+        text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict))
+        return parse_structured(text, model_cls)
+
+    @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(bedrock_error_is_retryable),
+        reraise=True,
+    )
+    def classify_event(self, content: str) -> Optional[EventClassification]:
+        logger.info("Classifying event via Bedrock model=%s", self.model)
+        try:
+            return self._complete_json(
+                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", EventClassification
+            )
+        except (ValidationError, ValueError, json.JSONDecodeError):
+            logger.warning("Bedrock classify_event produced invalid schema; dropping classification")
+            return None
+
+    @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(bedrock_error_is_retryable),
+        reraise=True,
+    )
+    def summarize_event(self, content: str) -> Optional[SourceGroundedSummary]:
+        logger.info("Summarizing event via Bedrock model=%s", self.model)
+        try:
+            return self._complete_json(
+                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", SourceGroundedSummary
+            )
+        except (ValidationError, ValueError, json.JSONDecodeError):
+            logger.warning("Bedrock summarize_event produced invalid schema")
+            return None
+
+    @_unavailable_on_any_error
+    @_with_operation_deadline("operation_deadline_seconds")
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception(bedrock_error_is_retryable),
+        reraise=True,
+    )
+    def classify_relationship(
+        self,
+        content: str,
+        event_summary: str,
+        context: Optional[str] = None,
+    ) -> RelationshipResult:
+        logger.info("Classifying relationship via Bedrock model=%s", self.model)
+        context_block = f"\n{context}" if context else ""
+        try:
+            raw = self._complete_json(
+                RELATIONSHIP_SYSTEM_PROMPT,
+                f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
+                RelationshipResult,
+            )
+            rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT
+            return RelationshipResult(relationship=rel, reasoning=raw.reasoning)
+        except (ValidationError, ValueError, json.JSONDecodeError):
+            logger.warning("Bedrock classify_relationship unparseable; treating as different events")
             return RelationshipResult.different()
 
     def is_same_event(self, content: str, event_summary: str, context: Optional[str] = None) -> bool:
@@ -956,7 +1288,7 @@ def get_llm_provider(env: Optional[str] = None, api_key: Optional[str] = None) -
         return TestLLMProvider()
 
     name = configured_llm_provider_name()
-    if env in ("nvidia", "openai", "anthropic"):
+    if env in ("nvidia", "openai", "anthropic", "bedrock"):
         name = env
 
     if mode != LLM_PRODUCTION:
@@ -988,6 +1320,21 @@ def get_llm_provider(env: Optional[str] = None, api_key: Optional[str] = None) -
         if provider.client is None:
             return FailClosedLLMProvider("Anthropic client could not be initialized.")
         logger.info("Using AnthropicProvider model=%s", settings.ANTHROPIC_MODEL)
+        return provider
+    if name == "bedrock":
+        if not _credential_present(settings.BEDROCK_MODEL_ID):
+            return FailClosedLLMProvider("BEDROCK_MODEL_ID is required for LLM_PROVIDER=bedrock.")
+        if not _credential_present(settings.AWS_REGION):
+            return FailClosedLLMProvider("AWS_REGION is required for LLM_PROVIDER=bedrock.")
+        provider = BedrockProvider(
+            model=settings.BEDROCK_MODEL_ID,
+            region_name=settings.AWS_REGION,
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+        )
+        if provider.client is None:
+            return FailClosedLLMProvider("Bedrock client could not be initialized (boto3 not installed?).")
+        logger.info("Using BedrockProvider model=%s region=%s", settings.BEDROCK_MODEL_ID, settings.AWS_REGION)
         return provider
 
     return FailClosedLLMProvider(f"Unknown LLM_PROVIDER={name!r}.")

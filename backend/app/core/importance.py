@@ -38,6 +38,25 @@ EVENT_KINDS = {
 SCOPES = {"narrow", "product", "platform", "ecosystem"}
 SECURITY = {"none", "limited", "significant"}
 
+# Distinguishes a research survey / meta-analysis ABOUT vulnerability
+# trends in aggregate from an actual vulnerability disclosure or active
+# incident. Without this, infer_event_signals()'s security regex — which
+# must stay broad to catch real incidents — matched "a survey of
+# vulnerability trends" identically to "RCE actively exploited in the
+# wild", and pipeline.py's calibration override
+# (`if security == "none" and inf_sec != "none": security = inf_sec`)
+# would then silently overrule an LLM that correctly said security="none"
+# for a benign paper. See docs/RED_TEAM_REPORT.md IMPORTANCE-RESEARCH-01.
+# Deliberately narrow (academic-survey phrasing that real incident
+# reports essentially never use) to avoid the opposite failure — masking
+# a genuine incident that happens to mention "study" in passing.
+_VULN_RESEARCH_SURVEY_RE = re.compile(
+    r"\b(survey of .*(?:vulnerabilit|trend)|literature review|systematic review|"
+    r"meta-analysis|research paper|academic study|"
+    r"analyz\w+ how .*(?:vulnerabilit|chang\w+)|vulnerability trends)\b",
+    re.IGNORECASE,
+)
+
 # Conservative noise patterns. Do NOT match research paper titles.
 _NOISE_PATTERNS = [
     re.compile(r"\btop\s+\d+\s+(ai\s+)?tools?\b", re.IGNORECASE),
@@ -278,7 +297,7 @@ def infer_event_signals(
         r"\b(rce|remote code execution|sandbox escape|compromis\w+|vulnerabilit\w+|"
         r"heap overflow|buffer overflow|exploit|account takeover|bounty)\b",
         text,
-    ):
+    ) and not _VULN_RESEARCH_SURVEY_RE.search(text):
         security = "significant"
 
     kind = "other"

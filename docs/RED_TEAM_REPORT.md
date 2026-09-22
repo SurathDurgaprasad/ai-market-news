@@ -18,6 +18,261 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### IMPORTANCE-RESEARCH-01 — Benign vulnerability-trends research could be forcibly reclassified as an active security incident
+- **Severity:** Medium (importance/classification correctness, the exact
+  Phase 1H hard case the operating brief named: "security keyword +
+  harmless research")
+- **Area:** Phase 1H — importance red team
+- **Status:** `FIXED`
+- **Description:** `test_importance_adversarial.py` already had a test
+  (`test_importance_security_keyword_in_harmless_research`) documenting
+  this as a "KNOWN LIMITATION" at the `infer_event_signals()` level —
+  but never verified whether it was actually exploitable end-to-end.
+  It was: `infer_event_signals()`'s security regex
+  (`\b(rce|...|vulnerabilit\w+|...)\b`) matched "a survey of vulnerability
+  trends" identically to an active incident report, returning early with
+  `kind="security_incident"` before the function's own research-paper
+  detection ever ran. Standing alone this would just be an inaccurate
+  helper — it becomes a real pipeline defect via `pipeline.py`'s
+  calibration override: `if security == "none" and inf_sec != "none":
+  security = inf_sec`. If the LLM correctly classified a benign research
+  article as `security_impact="none"` (or simply left it at
+  `EventClassification`'s own Pydantic default of `"none"` — a realistic
+  case, not contrived), the deterministic false positive would silently
+  **overrule the LLM's own correct judgment**.
+- **Reproduction:** `backend/tests/test_importance_research_vs_incident.py`
+  — a genuine end-to-end pipeline run (not just the standalone
+  `infer_event_signals()` unit test), `TestLLMProvider`'s default fixture
+  (`event_kind="other"`, `security_impact="none"`) standing in for "the
+  LLM made no specific claim," fed a realistic vulnerability-trends
+  survey article. Before the fix: `event.importance_score == 70`,
+  `event_kind == "security_incident"` — a fabricated active incident from
+  an academic survey.
+- **Fix:** `app/core/importance.py` — a new, deliberately narrow
+  `_VULN_RESEARCH_SURVEY_RE` (academic-survey phrasing: "survey of ...
+  vulnerabilit/trend", "literature review", "systematic review",
+  "meta-analysis", "research paper", "academic study", "vulnerability
+  trends") excludes the security-keyword match only when that specific
+  phrasing is present, so the broad keyword match real incidents rely on
+  stays intact.
+- **Neighboring attack (verified the fix doesn't over-broaden):**
+  `test_importance_genuine_incident_still_detected_alongside_survey_fix`
+  — a genuine, specific, actively-exploited RCE disclosure (no survey-
+  phrasing overlap) still correctly classifies `security="significant"`,
+  `kind="security_incident"`.
+- **Test hygiene:** the pre-existing test that had documented the bug as
+  permanent was updated to assert the corrected behavior instead of the
+  bug, with its docstring explaining the change and pointing to the new
+  end-to-end regression test — not deleted, not left contradicting reality.
+
+### TEST-QUALITY-EVAL-SUMMARY-01 — Two tests could pass unconditionally regardless of whether the real implementation was broken
+- **Severity:** Medium (test-suite integrity — exactly the Phase 1K
+  standard: "could this test pass while the real implementation is
+  broken?")
+- **Area:** Phase 1K — test quality audit
+- **Status:** `FIXED`
+- **Finding 1 — hardcoded metrics, not computed:**
+  `test_event_relationship_eval.py::test_corpus_precision_recall_summary`
+  asserted a precision/recall formula against `TP, TN, FP, FN = 11, 29,
+  0, 0` — **hardcoded literals**, not derived from actually running the
+  corpus through the pipeline. It would have passed unconditionally even
+  if every other test in the file were deleted. The real verification is
+  each individual `test_eval_*` function (which does call the real
+  pipeline), so nothing was actually unverified as a result — but this
+  specific test created a false impression of independent aggregate
+  proof. Fixed by adding a real check: the module is introspected via
+  `inspect.getmembers` to count actual `test_eval_*` functions and assert
+  that count matches the claimed `TP+TN+FP+FN` total, so adding or
+  removing a case without updating the hand-maintained tally now fails
+  loudly instead of silently drifting.
+- **Finding 2 — a test whose entire body was a docstring and `pass`:**
+  `test_evidence_adversarial.py::test_evidence_document_guarantees`
+  documented the evidence-verification system's guarantees (exactly the
+  Phase 1G distinction the brief asks for: does the quote exist / is it
+  attributable / does it support the claim) in a nicely-written docstring
+  — followed by `pass`. Zero verification value; it would pass identically
+  whether `verify_citations()` worked correctly or was completely broken.
+  Fixed: converted to a real module docstring (documentation, not
+  disguised as a test), and replaced the empty function with a genuine
+  new adversarial case — `test_evidence_cookie_banner_accepted_as_evidence`
+  — covering the one Phase-1G-named attack vector (cookie banner) the
+  file didn't already exercise behaviorally.
+- **Regression:** both fixes verified by running their respective files
+  (`test_event_relationship_eval.py`: 71 passed; `test_evidence_adversarial.py`:
+  5 passed) — the drift-check specifically was confirmed to actually catch
+  drift by intentionally miscounting during development before landing
+  the correct numbers.
+- **Neighboring attack, not yet done:** the brief explicitly says "assume
+  there are more, find them" beyond OpenAIProvider/AnthropicProvider/
+  concurrency/failure-injection (already fixed in prior sessions) and
+  these two. A systematic grep for `assert True`, bare `pass` test bodies,
+  and hardcoded metric literals was run across the suite this session
+  (see below) and these two were the only real hits — six other `pass`
+  occurrences were checked individually and are legitimate (exception-
+  swallowing in mocks/teardown, not vacuous test bodies). Not
+  exhaustive beyond that specific grep pattern; a deeper audit (mocks too
+  high in the stack, order-dependent tests, weak assertions) remains open
+  for a future session.
+
+### FAIRWIND-NEIGHBORS-01 — 5 new deliberately distinct neighbors of the Fairwind false-merge pattern
+- **Severity:** N/A (coverage expansion, not a defect)
+- **Area:** Phase 1D — Fairwind regression (explicitly required: "create
+  at least 5 neighboring variations of the same attack")
+- **Status:** `FIXED` / `VERIFIED` (deterministic); `PARTIALLY VERIFIED` (live)
+- **Description:** the existing corpus had one Fairwind case (program
+  deploying a model vs. the model's own release, both Google/Gemini).
+  Added 5 more, each a genuinely different company/model pair and a
+  different flavor of "shared model entity, not the release event," per
+  the brief's suggested list: FW1 program-uses-model (Anthropic/Claude
+  4.5), FW2 product-integrates-model (Perplexity/GPT-5), FW3
+  benchmark-evaluates-model (MLPerf/Llama 4), FW4 capability-announcement
+  (Notion/Gemini 3), FW5 deployment-announcement (Snowflake/Mistral Large
+  3). All 5 pass deterministically
+  (`test_event_relationship_eval.py::test_eval_FW1..FW5`, `TestLLMProvider`
+  — verifies candidate-generation/routing, not semantic judgment, since
+  `TestLLMProvider` doesn't reason about content).
+- **Live NVIDIA validation attempted for 2 of the 5 (FW2, FW4)**: both
+  timed out at the full retry budget rather than returning a real verdict
+  — see PROVIDER-AGNOSTIC-01 above for why this became the trigger for
+  the broader provider-agnostic work. **Not a confirmed pass or fail of
+  NVIDIA's actual semantic judgment on these two cases** — a timeout is
+  not a verdict, and reporting it as one either way would be exactly the
+  kind of fabricated-confidence the operating brief prohibits. Live
+  semantic validation for all 5 FW cases (and the rest of the corpus)
+  against OpenAI is the next step once `OPENAI_API_KEY` is available —
+  see PROVIDER-AGNOSTIC-01's "not verified" section.
+
+### PROVIDER-AGNOSTIC-01 — LLM architecture generalized to 4 providers; NVIDIA no longer the only live-tested one
+- **Severity:** N/A (architecture generalization, prompted by a real
+  operational problem — see below)
+- **Area:** Phase 1 continuation — provider abstraction / LLM boundary
+- **Status:** `PARTIALLY VERIFIED` — see the explicit verified/not-verified
+  split at the end of this entry. Do not read this as "Bedrock is
+  production-ready" or "OpenAI has been live-validated"; neither claim is
+  supported by what was actually run.
+- **Trigger:** live NVIDIA validation of the Phase 1D Fairwind-neighbor
+  cases (FW2, FW4) both genuinely timed out at the NVIDIA API level after
+  the full 100s x 3-attempt retry budget (~300s each, ~609s combined),
+  correctly converted to `LlmUnavailableError` by the NVDA-01 fix rather
+  than hanging — but this demonstrated that NVIDIA's live latency makes
+  it impractical as the primary provider for iterative development/live
+  semantic validation, even though the *reliability* fix (bounded,
+  correctly-classified failure) worked exactly as designed.
+- **Explicit instruction:** keep NVIDIA (the production default,
+  unchanged), make OpenAI the fast development/live-validation provider,
+  and make the architecture genuinely support 4 providers (NVIDIA,
+  OpenAI, Anthropic, Bedrock) through one uniform contract.
+
+#### Three-layer timeout model (new, applied to all 4 providers)
+Previously only two layers existed with no explicit boundary between
+them: an SDK-level per-phase timeout, and a tenacity retry budget whose
+combination produced only an *implicit* worst-case total (attempts x
+per-attempt deadline + backoff). Added a third, explicit layer:
+`_with_operation_deadline()` wraps the whole retry-decorated call
+(all attempts combined) in its own named ceiling
+(`{PROVIDER}_OPERATION_DEADLINE_SECONDS`), independently tunable per
+provider. OpenAI: request=30s/operation=60s (tight — fail fast during
+iteration, the whole point of this change). NVIDIA:
+request=100s/operation=330s (330s deliberately set just above the
+pre-existing implicit worst case of ~304s, so this refactor does not
+change NVIDIA's observed behavior — the explicit instruction was "NVIDIA
+behavior remains unchanged except for the improved contract"). Anthropic
+and Bedrock: request=100s/operation=330s, matching NVIDIA's shape since
+neither has real-world latency data to tune against yet.
+
+#### `OpenAIProvider` and `AnthropicProvider`: unchanged from the prior
+session's fixes (OPENAI-BROKEN-01) — the manual JSON-schema pattern, the
+`_unavailable_on_any_error` boundary, and now the operation-deadline
+layer. `OpenAIProvider` gained a proper `classify_relationship`
+implementation reuse already in place from that session; no further
+change needed there beyond the new deadline layer.
+
+#### `BedrockProvider` (new)
+Targets Anthropic Claude models hosted on Bedrock via `bedrock-runtime`'s
+`invoke_model` (AWS's documented request/response shape for Anthropic
+models: `anthropic_version` + `system` + `messages` in the body,
+`content` blocks in the response) — the same schema-in-prompt +
+Pydantic-validation pattern as every other provider, over boto3 instead
+of an HTTP client library. Bedrock hosts multiple model families (Titan/
+Nova, Llama, Mistral, ...) with different `invoke_model` shapes;
+deliberately targets only the Anthropic-model shape rather than
+attempting to abstract over all of them in one implementation.
+
+**Real bug caught before it shipped, precisely because this was verified
+rather than assumed**: the first version of `bedrock_error_is_retryable`/
+`_fatal_auth`/`_fatal_model` checked `type(exc).__name__ == "ClientError"`
+to classify AWS errors. Testing with `botocore.stub.Stubber` (a real
+boto3 mechanism that simulates authentic botocore `ClientError` responses
+without live AWS access or network calls — installed `boto3`/`botocore`
+specifically to make this possible, same reasoning as installing
+`anthropic` in the prior session) immediately proved this wrong: botocore
+raises dynamically-generated, service-specific exception subclasses (e.g.
+`botocore.errorfactory.ThrottlingException`) whose `type(exc).__name__`
+is the error code itself, not literally `"ClientError"` — the class
+*inherits from* `ClientError`, it isn't named it. The original check would
+have silently classified every single real Bedrock error as
+unclassified/non-retryable. Fixed to `isinstance(exc,
+botocore.exceptions.ClientError)` before this was ever exercised against
+anything resembling a real response. This is exactly the kind of
+"verified, not assumed" discipline this whole audit has been trying to
+apply, catching itself in the same trap it was set up to find in others.
+
+#### Configuration (`app/core/config.py`)
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (optional — boto3's own
+default credential chain is the normal path; explicit keys only override
+it), `AWS_REGION` and `BEDROCK_MODEL_ID` (both required for
+`LLM_PROVIDER=bedrock`, no sensible default). `provider_is_configured()`,
+`resolve_llm_mode()`, and `get_llm_provider()` extended for `"bedrock"`
+alongside the existing three. Missing `BEDROCK_MODEL_ID`/`AWS_REGION`
+fails at construction (deterministic, no network attempt) — actual AWS
+credential validity is discovered at call time (correctly, since that's
+how AWS's credential model actually works: an IAM role or SSO session
+with no explicit keys anywhere in config is completely valid and normal)
+and normalized to `LlmUnavailableError` like any other provider failure.
+
+#### Regression tests (`backend/tests/test_provider_agnostic.py`, 15 tests, all passing)
+OpenAI initializes correctly / fails clearly without a key; 3 Bedrock
+error-normalization tests via Stubber (throttling, access-denied, no-
+credentials) plus a clean-failure-without-config test; a parametrized
+missing-credentials test across all 4 providers; an unknown-provider
+test; and — the test that actually proves the architectural claim, not
+just each provider individually — a parametrized test running the exact
+same fake classification through `IntelligencePipeline.process_article()`
+once per provider class (NVIDIA/OpenAI/Anthropic/Bedrock, each with only
+`_complete_json` patched, everything else real) and asserting the
+resulting `Event` is IDENTICAL regardless of which concrete provider was
+plugged in. This is possible specifically because all four providers
+share the exact same `_complete_json(system, user, model_cls)` internal
+contract — which is what actually makes the pipeline provider-agnostic
+in practice, not just in principle.
+
+Full deterministic suite after this work: **382 passed, 0 failed** (up
+from 367 — the 15 new tests).
+
+#### Explicit VERIFIED / NOT VERIFIED split (do not blur these)
+- `VERIFIED`: OpenAI, NVIDIA, and Anthropic provider construction, error
+  normalization, and timeout bounding, against real SDK objects (mocked
+  transport, real client classes) — see the test files listed above.
+- `VERIFIED`: Bedrock construction, missing-config failure, and error
+  normalization against **simulated** botocore responses (Stubber) — a
+  legitimate, real testing mechanism, but not a live AWS call.
+- `VERIFIED`: pipeline behavior is identical across all 4 provider
+  classes at the code level (the parametrized pipeline test).
+- `NOT VERIFIED`: a real, successful Bedrock API call. This sandbox has
+  no AWS credentials or Bedrock access — explicitly permitted by the
+  task ("seams should be fully prepared if credentials/SDK verification
+  cannot be performed yet"). Do not read the Stubber-based tests passing
+  as proof Bedrock actually works end-to-end against real AWS.
+- `NOT VERIFIED`: live OpenAI semantic validation. `OPENAI_API_KEY` is
+  **absent** from this environment — confirmed via presence-only check,
+  value never inspected. The bounded live-semantic-evaluation task
+  (official+news same event, same-model-different-event, Fairwind
+  neighbors, benign-research-not-security-incident, etc.) could not be
+  executed. This is a genuine, reported gap, not a metric quietly
+  omitted — see docs/ENGINEERING_STATUS.md for the explicit "not yet
+  started" callout, and the session's final report to the user asking
+  how to proceed (supply a key, or accept this as a documented gap).
+
 ### SCHED-OUTAGE-01 — A provider outage was indistinguishable from "no AI events found"
 - **Severity:** High — this is exactly the kind of correctness gap that
   erodes trust in the product silently: an operator looking at the admin

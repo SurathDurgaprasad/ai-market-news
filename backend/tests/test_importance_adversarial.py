@@ -54,14 +54,47 @@ def test_importance_unknown_company_significant_event():
     assert calibrated >= 70
 
 def test_importance_security_keyword_in_harmless_research():
-    # Mentions "vulnerability" but is just research
+    """
+    Mentions "vulnerability" but is just research about vulnerability
+    trends in aggregate, not an active incident.
+
+    This was previously a documented KNOWN LIMITATION: infer_event_signals
+    flagged bare "vulnerabilit\\w+" as security="significant" regardless
+    of context, which pipeline.py's calibration override could then use
+    to overrule an LLM that correctly said security="none" for a benign
+    paper — a real, end-to-end exploitable false positive, not just an
+    inaccurate helper function. Fixed via _VULN_RESEARCH_SURVEY_RE in
+    app/core/importance.py (see docs/RED_TEAM_REPORT.md
+    IMPORTANCE-RESEARCH-01 and
+    tests/test_importance_research_vs_incident.py for the end-to-end
+    pipeline reproduction/regression test). This test now asserts the
+    corrected behavior instead of documenting the bug as permanent.
+    """
     title = "A survey of vulnerability trends in 2024"
     content = "This research paper analyzes how vulnerabilities have changed."
     kind, scope, security = infer_event_signals(title, None, content)
-    
-    # Wait, infer_event_signals flags "vulnerabilit" as security="significant"
-    # AND if security="significant", it forces kind="security_incident"!
-    # This is a KNOWN LIMITATION: research papers about vulnerabilities are misclassified
-    # as active security incidents.
-    assert security == "significant"
+
+    assert security == "none"
+    assert kind != "security_incident"
+
+
+def test_importance_genuine_incident_still_detected_alongside_survey_fix():
+    """
+    Neighboring attack on the IMPORTANCE-RESEARCH-01 fix: the survey/study
+    exclusion must not swallow a genuine active incident that happens to
+    be reported alongside research-sounding framing (e.g. a researcher
+    who discovered and is disclosing a real, specific vulnerability).
+    """
+    title = "Researcher discloses critical RCE vulnerability in widely used library"
+    content = (
+        "A security researcher today disclosed a remote code execution vulnerability "
+        "actively exploited in the wild, affecting a widely used open-source library. "
+        "A patch is available and users should update immediately."
+    )
+    kind, scope, security = infer_event_signals(title, None, content)
+
+    assert security == "significant", (
+        "A genuine, specific, actively-exploited RCE disclosure must still be flagged "
+        "significant — the survey/study exclusion must be narrow, not swallow real incidents."
+    )
     assert kind == "security_incident"

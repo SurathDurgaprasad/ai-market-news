@@ -38,6 +38,10 @@ _hydrate_os_environ(
     "NVIDIA_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "BEDROCK_MODEL_ID",
     "LLM_PROVIDER",
     "NVIDIA_MODEL",
     "NVIDIA_BASE_URL",
@@ -80,7 +84,19 @@ class Settings(BaseSettings):
     NVIDIA_API_KEY: Optional[str] = None
     NVIDIA_MODEL: str = "openai/gpt-oss-20b"
     NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
-    
+
+    # Amazon Bedrock. AWS credentials are intentionally optional here —
+    # boto3's own default credential chain (env vars, ~/.aws/credentials,
+    # an IAM role, SSO) is the normal way to authenticate; these fields
+    # are only for explicitly overriding that chain. BEDROCK_MODEL_ID and
+    # AWS_REGION have no sensible default and ARE required for
+    # LLM_PROVIDER=bedrock — see provider_is_configured() /
+    # get_llm_provider() in app/core/providers/llm.py.
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_REGION: Optional[str] = None
+    BEDROCK_MODEL_ID: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
     def get_database_url(self) -> str:

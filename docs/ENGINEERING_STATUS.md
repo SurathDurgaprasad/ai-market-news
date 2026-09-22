@@ -429,3 +429,71 @@ failed** (13 skipped, unchanged) — up from 357. 4 new test files
 `test_scheduler_overlap_prevention.py`, plus fixes to 3 pre-existing
 assertions in the timeout-bound test files that correctly needed to
 change to match the improved provider contract, not weakenings).
+
+#### Continued: Phase 1C/1D/1G/1H/1K (event identity, Fairwind, evidence, importance, test quality)
+
+- **`FAIRWIND-NEIGHBORS-01`** — `FIXED`/`VERIFIED` (deterministic): 5 new,
+  deliberately distinct Fairwind-pattern cases (FW1-FW5, different
+  company/model pairs each), all passing deterministically. 2 of the 5
+  attempted live against NVIDIA both timed out at the full retry budget
+  rather than returning a verdict — not reported as pass or fail either
+  way, since a timeout isn't a judgment. This became the trigger for the
+  provider-agnostic work below.
+- **`IMPORTANCE-RESEARCH-01`** — `FIXED`: a benign vulnerability-trends
+  research survey could be forcibly reclassified as an active
+  `security_incident` (importance_score inflated to 70) via a
+  deterministic-signal override that could overrule the LLM's own correct
+  "none" classification. Fixed with a narrow, verified-not-to-over-broaden
+  exclusion. End-to-end pipeline reproduction, not just a unit test.
+- **`TEST-QUALITY-EVAL-SUMMARY-01`** — `FIXED`: found two tests that could
+  pass unconditionally regardless of whether the real implementation
+  worked — a hardcoded-metrics "summary" test and a test whose entire
+  body was a docstring + `pass`. Both fixed; the hardcoded one now
+  cross-checks its claimed counts against the actual number of test
+  functions in the module via introspection, so it can't silently drift
+  again.
+
+#### Session 3 continued: PROVIDER-AGNOSTIC-01 (full detail in `docs/RED_TEAM_REPORT.md`)
+
+Triggered by the Fairwind-neighbor live NVIDIA timeouts above, and by an
+explicit instruction to stop using NVIDIA as the primary development
+provider (too slow for iteration) while keeping it as the unchanged
+production default. Added a third, explicit timeout layer
+(`_with_operation_deadline`, distinct from the SDK-level and retry-budget
+layers) applied uniformly to all providers; rewrote `BedrockProvider` as
+a real, fourth implementation (Anthropic-on-Bedrock via `boto3`); wired
+`bedrock` through `provider_is_configured`/`resolve_llm_mode`/
+`get_llm_provider`. Caught and fixed a real bug in the Bedrock error
+classifier before it ever shipped — `type(exc).__name__ == "ClientError"`
+never matches a real botocore exception (verified with
+`botocore.stub.Stubber`, not assumed) — precisely because this session
+kept applying the same "verify, don't assume" discipline to its own new
+code, not just to inherited code.
+
+15 new regression tests (`test_provider_agnostic.py`), including a
+parametrized test proving `IntelligencePipeline` produces an IDENTICAL
+`Event` regardless of which of the 4 concrete provider classes is
+plugged in — the actual architectural claim, verified directly rather
+than inferred from each provider passing its own tests separately.
+
+**`VERIFIED`**: OpenAI/NVIDIA/Anthropic construction, error
+normalization, timeout bounding (real SDK objects, mocked transport).
+Bedrock construction, missing-config failure, error normalization
+(simulated via Stubber — a real boto3 mechanism, not a live call).
+Pipeline behavior identical across all 4 providers at the code level.
+
+**`NOT VERIFIED`, honestly reported, not worked around**:
+1. A real, successful Bedrock API call — no AWS credentials in this
+   sandbox. Explicitly anticipated and permitted by the task.
+2. **Live OpenAI semantic validation** — `OPENAI_API_KEY` is absent from
+   this environment (confirmed via presence-only check; value never
+   inspected). The requested bounded live evaluation (official+news same
+   event, same-model-different-event, Fairwind neighbors, benign-research-
+   not-incident, etc.) could not be executed. This is reported as a gap
+   in the session's final report to the user, with an explicit ask for
+   how to proceed — not silently skipped, and NVIDIA was deliberately
+   NOT substituted for this step despite being available, since doing so
+   without saying so would misrepresent what was actually validated.
+
+Full deterministic suite after this work: **382 passed, 0 failed** (15
+skipped, unchanged) — up from 360.

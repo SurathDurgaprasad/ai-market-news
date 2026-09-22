@@ -232,6 +232,49 @@ def test_nvidia_E_fairwind_regression(nvidia):
     )
 
 
+# FW2. DIFFERENT — product integrates model vs model release (Fairwind neighbor,
+# see deterministic corpus test_eval_FW2_* in test_event_relationship_eval.py —
+# a bounded live subset, not all 5 neighbors, given real API cost per case)
+def test_nvidia_FW2_product_integrates_model(nvidia):
+    article = (
+        "OpenAI released GPT-5 today, its most capable model to date, with major "
+        "improvements in reasoning and coding benchmarks."
+    )
+    existing = (
+        "Perplexity integrates GPT-5 into its search assistant\n"
+        "Perplexity announced that its search assistant now uses GPT-5 for complex "
+        "multi-step queries, joining several other models already available in the product."
+    )
+    r = _eval(nvidia, article, existing,
+              context="Event kind context — existing event: capability; incoming article: model_release.",
+              expected_relationship=EventRelationship.DIFFERENT_EVENT, label="FW2-product-integration")
+    _results.append(r)
+    assert r["verdict"] != "FP", (
+        f"product-integrates-model must not merge with the model's own release: {r['reasoning']}"
+    )
+
+
+# FW4. DIFFERENT — capability announcement using model vs model release (Fairwind
+# neighbor, see deterministic corpus test_eval_FW4_* in test_event_relationship_eval.py)
+def test_nvidia_FW4_capability_announcement_using_model(nvidia):
+    article = (
+        "Google released Gemini 3, its latest flagship model, with new multimodal "
+        "capabilities and improved long-context performance."
+    )
+    existing = (
+        "Notion announces AI Q&A feature powered by Gemini 3\n"
+        "Notion announced a new AI Q&A capability in its workspace product, built on top of "
+        "Google's Gemini 3 model, letting users ask questions across their notes."
+    )
+    r = _eval(nvidia, article, existing,
+              context="Event kind context — existing event: capability; incoming article: model_release.",
+              expected_relationship=EventRelationship.DIFFERENT_EVENT, label="FW4-capability-announcement")
+    _results.append(r)
+    assert r["verdict"] != "FP", (
+        f"capability-announcement-using-model must not merge with the model's own release: {r['reasoning']}"
+    )
+
+
 # F. DIFFERENT — same company, different products
 def test_nvidia_F_same_company_different_products(nvidia):
     article = (

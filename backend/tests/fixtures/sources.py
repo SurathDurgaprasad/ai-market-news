@@ -748,4 +748,94 @@ FIXTURES = {
         "published_at": "2026-09-20T09:00:00Z",
     },
     # (combined with eval_update_initial as the GPT-5 release)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Phase 1D — Fairwind regression neighbors: 5 deliberately distinct
+    # variations of the same underlying trap (shared model entity, but
+    # the article is NOT reporting the model's release). Each uses a
+    # different company/model pair from the rest of the corpus so this
+    # isn't just the Fairwind case with names swapped in.
+    # ─────────────────────────────────────────────────────────────────
+
+    # FW1. program uses model (closest structural twin of the original
+    # Fairwind case, deliberately a different company/model pair)
+    "eval_fw1_program_launch": {
+        "title": "Anthropic launches Constitutional Shield Program using Claude 4.5 for content moderation",
+        "url": "https://anthropic.com/news/constitutional-shield",
+        "content": "Anthropic announced the Constitutional Shield Program, giving trust-and-safety teams "
+                   "at partner companies access to Claude 4.5 for automated content moderation review. "
+                   "This is a deployment program for enterprise trust-and-safety partners.",
+        "published_at": "2026-09-10T15:00:00Z",
+    },
+    "eval_fw1_model_release": {
+        "title": "Anthropic releases Claude 4.5 with improved reasoning",
+        "url": "https://anthropic.com/news/claude-4-5",
+        "content": "Anthropic released Claude 4.5, its latest model with improved multi-step reasoning "
+                   "and a larger context window. The model is available via the Anthropic API.",
+        "published_at": "2026-09-10T15:00:00Z",
+    },
+
+    # FW2. product integrates model
+    "eval_fw2_product_integration": {
+        "title": "Perplexity integrates GPT-5 into its search assistant",
+        "url": "https://perplexity.ai/blog/gpt-5-integration",
+        "content": "Perplexity announced that its search assistant now uses GPT-5 for complex "
+                   "multi-step queries, joining several other models already available in the product.",
+        "published_at": "2026-09-11T12:00:00Z",
+    },
+    "eval_fw2_model_release": {
+        "title": "OpenAI releases GPT-5",
+        "url": "https://openai.com/blog/gpt-5-launch",
+        "content": "OpenAI released GPT-5 today, its most capable model to date, with major "
+                   "improvements in reasoning and coding benchmarks.",
+        "published_at": "2026-09-11T12:00:00Z",
+    },
+
+    # FW3. benchmark evaluates model
+    "eval_fw3_benchmark_result": {
+        "title": "MLPerf results show Llama 4 leads inference efficiency tests",
+        "url": "https://mlcommons.org/benchmarks/llama-4-results",
+        "content": "The latest MLPerf inference benchmark results show Llama 4 achieving the best "
+                   "tokens-per-second efficiency among open-weight models tested this quarter.",
+        "published_at": "2026-09-12T09:00:00Z",
+    },
+    "eval_fw3_model_release": {
+        "title": "Meta releases Llama 4",
+        "url": "https://ai.meta.com/blog/llama-4-launch",
+        "content": "Meta released Llama 4 today, its newest open-weight model family, available "
+                   "in multiple parameter sizes via Hugging Face.",
+        "published_at": "2026-09-12T09:00:00Z",
+    },
+
+    # FW4. company announces capability using model
+    "eval_fw4_capability_announcement": {
+        "title": "Notion announces AI Q&A feature powered by Gemini 3",
+        "url": "https://notion.so/blog/ai-qa-gemini",
+        "content": "Notion announced a new AI Q&A capability in its workspace product, built on top of "
+                   "Google's Gemini 3 model, letting users ask questions across their notes.",
+        "published_at": "2026-09-13T10:00:00Z",
+    },
+    "eval_fw4_model_release": {
+        "title": "Google releases Gemini 3",
+        "url": "https://deepmind.google/blog/gemini-3-launch",
+        "content": "Google released Gemini 3, its latest flagship model, with new multimodal "
+                   "capabilities and improved long-context performance.",
+        "published_at": "2026-09-13T10:00:00Z",
+    },
+
+    # FW5. deployment announcement mentioning model
+    "eval_fw5_deployment_announcement": {
+        "title": "Snowflake deploys Mistral Large 3 for enterprise data analysis",
+        "url": "https://snowflake.com/blog/mistral-large-3-deployment",
+        "content": "Snowflake announced it has deployed Mistral Large 3 within its Cortex AI "
+                   "platform, enabling customers to run natural-language data analysis queries.",
+        "published_at": "2026-09-14T11:00:00Z",
+    },
+    "eval_fw5_model_release": {
+        "title": "Mistral AI releases Mistral Large 3",
+        "url": "https://mistral.ai/news/mistral-large-3",
+        "content": "Mistral AI released Mistral Large 3, its flagship model, with expanded "
+                   "context length and improved function-calling accuracy.",
+        "published_at": "2026-09-14T11:00:00Z",
+    },
 }

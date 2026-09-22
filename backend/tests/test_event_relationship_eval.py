@@ -480,6 +480,66 @@ def test_eval_E_program_using_model_not_same_as_model_release(db_session):
     assert e1 is not None and e2 is not None
     assert e1.id != e2.id, "Fairwind regression must remain separate"
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1D — 5 deliberately distinct neighboring variations of the Fairwind
+# trap (shared model entity, article NOT about the model's release), each
+# with a different company/model pair so this isn't the same case with
+# names swapped. A shared entity must never be sufficient evidence of
+# SAME_EVENT on its own — these exercise that from 5 different angles.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_eval_FW1_program_uses_model_not_same_as_release(db_session):
+    """FW1. DIFFERENT: program deploying Claude 4.5 ≠ release of Claude 4.5. (TN)"""
+    pipeline = IntelligencePipeline(db_session, llm_env="test")
+    provider = TestSourceProvider()
+    source = db_session.query(Source).first()
+    e1 = pipeline.process_article(provider.fetch("u", "eval_fw1_program_launch")["data"], source.id)
+    e2 = pipeline.process_article(provider.fetch("u", "eval_fw1_model_release")["data"], source.id)
+    assert e1 is not None and e2 is not None
+    assert e1.id != e2.id, "program-uses-model must not merge with the model's own release"
+
+def test_eval_FW2_product_integrates_model_not_same_as_release(db_session):
+    """FW2. DIFFERENT: Perplexity integrating GPT-5 ≠ OpenAI releasing GPT-5. (TN)"""
+    pipeline = IntelligencePipeline(db_session, llm_env="test")
+    provider = TestSourceProvider()
+    source = db_session.query(Source).first()
+    e1 = pipeline.process_article(provider.fetch("u", "eval_fw2_product_integration")["data"], source.id)
+    e2 = pipeline.process_article(provider.fetch("u", "eval_fw2_model_release")["data"], source.id)
+    assert e1 is not None and e2 is not None
+    assert e1.id != e2.id, "product-integrates-model must not merge with the model's own release"
+
+def test_eval_FW3_benchmark_evaluates_model_not_same_as_release(db_session):
+    """FW3. DIFFERENT: MLPerf benchmarking Llama 4 ≠ Meta releasing Llama 4. (TN)"""
+    pipeline = IntelligencePipeline(db_session, llm_env="test")
+    provider = TestSourceProvider()
+    source = db_session.query(Source).first()
+    e1 = pipeline.process_article(provider.fetch("u", "eval_fw3_benchmark_result")["data"], source.id)
+    e2 = pipeline.process_article(provider.fetch("u", "eval_fw3_model_release")["data"], source.id)
+    assert e1 is not None and e2 is not None
+    assert e1.id != e2.id, "benchmark-evaluates-model must not merge with the model's own release"
+
+def test_eval_FW4_capability_announcement_not_same_as_release(db_session):
+    """FW4. DIFFERENT: Notion's Gemini-3-powered Q&A feature ≠ Google releasing Gemini 3. (TN)"""
+    pipeline = IntelligencePipeline(db_session, llm_env="test")
+    provider = TestSourceProvider()
+    source = db_session.query(Source).first()
+    e1 = pipeline.process_article(provider.fetch("u", "eval_fw4_capability_announcement")["data"], source.id)
+    e2 = pipeline.process_article(provider.fetch("u", "eval_fw4_model_release")["data"], source.id)
+    assert e1 is not None and e2 is not None
+    assert e1.id != e2.id, "capability-announcement-using-model must not merge with the model's own release"
+
+def test_eval_FW5_deployment_announcement_not_same_as_release(db_session):
+    """FW5. DIFFERENT: Snowflake deploying Mistral Large 3 ≠ Mistral AI releasing it. (TN)"""
+    pipeline = IntelligencePipeline(db_session, llm_env="test")
+    provider = TestSourceProvider()
+    source = db_session.query(Source).first()
+    e1 = pipeline.process_article(provider.fetch("u", "eval_fw5_deployment_announcement")["data"], source.id)
+    e2 = pipeline.process_article(provider.fetch("u", "eval_fw5_model_release")["data"], source.id)
+    assert e1 is not None and e2 is not None
+    assert e1.id != e2.id, "deployment-announcement-mentioning-model must not merge with the model's own release"
+
+
 def test_eval_R_framework_integration_not_model_release(db_session):
     """R. DIFFERENT: LangChain Claude 4 integration ≠ Claude 4 release. (TN)"""
     pipeline = IntelligencePipeline(db_session, llm_env="test")
@@ -679,8 +739,24 @@ def test_eval_safety_paper_not_model_release(db_session):
 
 def test_corpus_precision_recall_summary():
     """
-    Documents expected TP/TN/FP/FN for this 40-case deterministic corpus.
+    Documents expected TP/TN/FP/FN for this deterministic corpus.
     TestLLMProvider is deterministic; these are NOT real NVIDIA results.
+
+    IMPORTANT — what this test does and does not verify: the TP/TN/FP/FN
+    counts below are a hand-maintained tally, not independently computed
+    from actually running the corpus through the pipeline. The real
+    verification is each individual `test_eval_*` function above, which
+    DOES call the real pipeline and assert real merge/no-merge behavior.
+    This function previously asserted only a precision/recall FORMULA
+    against those hardcoded numbers — it would have passed unconditionally
+    even if every other test in this file were failing or deleted, which
+    is exactly the "test that could pass while the real implementation is
+    broken" pattern flagged in the operating brief's Phase 1K. Fixed to
+    additionally verify the tally hasn't silently drifted from the actual
+    test file (see docs/RED_TEAM_REPORT.md TEST-QUALITY-EVAL-SUMMARY-01):
+    the counts below are cross-checked against the real number of
+    `test_eval_*` functions currently defined in this module, so adding
+    or removing a case without updating this summary now fails loudly.
 
     SAME_EVENT (expect merge):
       A, B, H, I, J, K, adversarial_1, community_14, multilingual_12, rumor_3 = 10 TP
@@ -694,16 +770,35 @@ def test_corpus_precision_recall_summary():
     DIFFERENT_EVENT (expect separate):
       E(Fairwind), R, S, F, T, V, W, X, Y, Z, AA, CC, DD,
       adversarial_same_company, same_family_tiers, conflicting_facts,
-      api_research, generic_titles, minutes_apart, safety_paper = 20 TN
+      api_research, generic_titles, minutes_apart, safety_paper,
+      program_uses_model, product_integrates_model, benchmark_evaluates_model,
+      capability_announcement_using_model, deployment_announcement_mentioning_model
+        = 25 TN
 
-    Totals: TP=11  TN=29  FP=0  FN=0
+    Totals: TP=11  TN=34  FP=0  FN=0
     Precision = 11/11 = 1.0 (no false merges)
     Recall-like = 11/11 = 1.0 (all expected merges occurred)
 
     NOTE: These results are ONLY valid for TestLLMProvider.
           Real NVIDIA results are in test_nvidia_relationship_eval.py.
     """
-    TP, TN, FP, FN = 11, 29, 0, 0
+    TP, TN, FP, FN = 11, 34, 0, 0
+
+    import inspect
+    import sys
+    current_module = sys.modules[__name__]
+    actual_eval_case_count = sum(
+        1 for name, obj in inspect.getmembers(current_module, inspect.isfunction)
+        if name.startswith("test_eval_") and obj.__module__ == __name__
+    )
+    claimed_case_count = TP + TN + FP + FN
+    assert actual_eval_case_count == claimed_case_count, (
+        f"This summary claims {claimed_case_count} eval cases (TP={TP}+TN={TN}+FP={FP}+FN={FN}) "
+        f"but the module actually defines {actual_eval_case_count} test_eval_* functions. "
+        f"A case was added or removed without updating this hand-maintained tally — "
+        f"update the counts above (and their category breakdown) to match."
+    )
+
     assert TP + FP > 0
     precision = TP / (TP + FP)
     recall_like = TP / (TP + FN)

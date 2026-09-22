@@ -27,3 +27,16 @@ pytest-timeout==2.3.1
 # confirming `from app.main import app` still imports cleanly.
 # If a real Celery/Redis/Postgres/pgvector migration is ever undertaken,
 # re-add these deliberately then — not as leftover scaffolding.
+
+# NOT installed by default: anthropic, boto3. LLM_PROVIDER selects exactly
+# one production provider at a time (see app/core/providers/llm.py); only
+# NVIDIA (the configured default) and OpenAI (this project's development/
+# live-semantic-validation provider, see docs/RED_TEAM_REPORT.md
+# PROVIDER-AGNOSTIC-01) need their SDK installed unconditionally, since
+# openai==1.12.0 above is shared by both NVIDIAProvider (OpenAI-compatible
+# endpoint) and OpenAIProvider. AnthropicProvider and BedrockProvider are
+# both fully implemented and already behind their own `try/except
+# ImportError` — install `anthropic` or `boto3` yourself if you set
+# LLM_PROVIDER=anthropic / LLM_PROVIDER=bedrock. Without the package
+# installed, get_llm_provider() returns FailClosedLLMProvider with a
+# clear reason, not a crash.
