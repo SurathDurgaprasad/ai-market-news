@@ -767,4 +767,25 @@ than forcing a finding. No production code changed for this area; 2 new
 tests in `backend/tests/test_db_integrity_attacks.py`. Full details in
 `docs/RED_TEAM_REPORT.md` (`DB-ISOLATION-01`).
 
-Next: Area D (article_body enrichment path integration test) — not yet started.
+#### Area D — article_body enrichment path: `ARTICLE-BODY-FETCH-01` — `VERIFIED`, attack **not reproduced**
+
+Explicit instruction: don't assume the decompression-bomb fix is
+inherited by `enrich_article()` just because it calls a `fetch_fn` that
+defaults to the real `fetch_url` in production — prove it. Grepped every
+`fetch_fn=` in `test_article_body.py`: every existing test passes a
+hand-rolled mock, none call the real `fetch_url()`. The inheritance claim
+was genuinely untested.
+
+Built two proofs using the same `GzipTransport` technique already
+established in `test_decompression_bomb.py` (only the transport is
+faked — `fetch_url` itself is real), called through
+`enrich_article(..., fetch_fn=fetch_url)`, the actual production
+entrypoint: (1) a gzip-bomb article page — `enrich_article` didn't hang,
+didn't propagate the exception, fell back to the original feed text; (2)
+a normal small gzip-compressed article page — enriched correctly,
+chrome stripped, publisher name extracted from the same fetched HTML.
+Both held. No defect found; recorded as `VERIFIED`. 2 new tests in
+`backend/tests/test_article_body_real_fetcher.py`. Full details in
+`docs/RED_TEAM_REPORT.md` (`ARTICLE-BODY-FETCH-01`).
+
+Next: Area E (scheduler whole-cycle budget measurement) — not yet started.

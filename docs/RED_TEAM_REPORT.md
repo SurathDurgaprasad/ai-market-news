@@ -18,6 +18,42 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### ARTICLE-BODY-FETCH-01 — Decompression-bomb protection confirmed inherited through the real article_body.py entrypoint (not assumed)
+- **Severity:** N/A (verification, not a defect)
+- **Area:** Phase 1B, second attack pass, Area D (article_body
+  enrichment path) — explicit instruction: do not assume
+  `INGEST-DECOMPRESSION-BOMB-01`'s fix is inherited by `enrich_article()`
+  merely because it calls a `fetch_fn` that defaults to
+  `app.core.fetcher.fetch_url` in production; prove it through the real
+  entrypoint.
+- **Status:** `VERIFIED`, attack **not reproduced**
+- **Description:** Reconnaissance (grepped every `fetch_fn=` in
+  `test_article_body.py`) found that **every** existing test passes a
+  hand-rolled mock `fetch_fn` lambda returning a canned response object —
+  none of them call the real `fetch_url()` at all. The inheritance claim
+  was genuinely untested, not merely under-tested.
+  **Built two direct proofs, using the same `GzipTransport` proof
+  technique already established in `test_decompression_bomb.py` (only
+  the httpx transport is faked; `fetch_url` itself is the real,
+  unmodified function), called through `enrich_article(..., fetch_fn=fetch_url)`
+  — the actual entrypoint `article_body.py` uses:**
+  1. A feed entry with a too-short body (triggering the fetch path)
+     whose article page is a genuine gzip bomb (small on the wire, ~40x
+     `MAX_RESPONSE_BYTES` decompressed) — `enrich_article()` did not
+     hang, did not propagate the `ValueError` `fetch_url` raises (its own
+     docstring's contract: "this module never raises"), and fell back to
+     the original feed-derived text (`"{title}. {short_body}"`).
+  2. Neighboring/contrast case: a genuinely small, honestly
+     gzip-compressed article page enriches correctly end-to-end —
+     `<nav>` chrome stripped, `<article>` body extracted, `og:site_name`
+     publisher correctly picked up from the same fetched HTML.
+  Both behaved correctly. No defect found — recorded honestly as
+  `VERIFIED` rather than forcing a finding.
+- **New tests:** `backend/tests/test_article_body_real_fetcher.py`
+  (2 tests, both passing alongside the full existing
+  `test_article_body.py`/`test_decompression_bomb.py` suites — 14 tests
+  total, no regressions).
+
 ### DB-ISOLATION-01 — SQLite/WAL transaction isolation and rollback scoping, directly verified (not assumed)
 - **Severity:** N/A (verification, not a defect)
 - **Area:** Phase 1B, second attack pass, Area C (database integrity red
