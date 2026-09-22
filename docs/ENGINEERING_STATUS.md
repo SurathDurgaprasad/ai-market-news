@@ -788,4 +788,49 @@ Both held. No defect found; recorded as `VERIFIED`. 2 new tests in
 `backend/tests/test_article_body_real_fetcher.py`. Full details in
 `docs/RED_TEAM_REPORT.md` (`ARTICLE-BODY-FETCH-01`).
 
-Next: Area E (scheduler whole-cycle budget measurement) — not yet started.
+#### Area E — Scheduler whole-cycle budget: measured, status moved from unmeasured `OPEN FINDING` to `CONFIRMED` — deliberately still not fixed
+
+Explicit instruction: do NOT immediately add a timeout — measure first.
+This finding already existed from Phase 1A as an unmeasured, theoretical
+concern (no outer whole-cycle wall-clock budget in
+`scheduler.py::run_ingestion_cycle`). This session built the actual
+measurement rather than continuing to assume.
+
+Read `scheduler.py::run_ingestion_cycle` closely: the per-source loop is
+a single, strictly sequential Python `for` loop — no per-source timeout,
+no outer cycle deadline, no concurrency. Built
+`test_scheduler_cycle_budget.py` with two direct measurements against the
+real `run_ingestion_cycle()` (only the network transport faked): (1)
+three due sources (one slow, two fast) — the fast sources' fetches were
+not even attempted until the slow source's fetch fully finished, and the
+cycle's total duration fully absorbed the slow source's delay,
+**confirming** the architecture is exactly as read, not merely
+theoretical; (2) a persistently-failing source triggered exactly
+`fetch_url`'s own 4-attempt retry budget, not a multiple of it — a
+genuine **positive** bound: the scheduler does not compound retry
+amplification with a second retry layer of its own.
+
+**Deliberately still not fixed** — no timeout added, per the explicit
+instruction not to force an architectural change without a specific,
+justified number, and the standing "do NOT add arbitrary short timeouts
+that cause valid ingestion to fail" rule from Phase 1A. 2 new tests in
+`backend/tests/test_scheduler_cycle_budget.py`. Full details in
+`docs/RED_TEAM_REPORT.md`'s SCHED-OUTAGE-01 entry (updated in place, not
+rewritten — the original "not yet resolved" history is preserved, with
+this session's measurement appended after it).
+
+This completes all 5 areas (A–E) of the second Phase 1B attack pass.
+
+**Final full-suite run:** 420 passed, 1 failed, 24 skipped (421 total —
+up from 415 after Area B, +6 for Areas C/D/E's 2 tests each, exactly as
+expected). The 1 failure is
+`test_prompt_injection_semantic.py::test_semantic_prompt_injection_fabricate_evidence`
+again — the same pre-existing, unconditional live-NVIDIA test flagged
+after Area B. This run gives a second, opposite data point: the earlier
+run failed then passed on isolated retry; this run the live model
+**did** comply with the injected instruction and fabricated the
+citation. Two runs, two different live-model outcomes for the identical
+test input — direct confirmation this is inherent non-determinism in
+grading a live model's compliance with a prompt injection (no
+seed/temperature=0 guarantee on that call), not a regression introduced
+by anything in Areas A–E. Not modified: out of scope for this pass.

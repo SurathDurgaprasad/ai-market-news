@@ -937,6 +937,37 @@ whatever machine runs it.
   typical cycle duration under realistic article volume before choosing
   a number, which this session did not do. Tracked as the next Phase 1A
   item.
+- **Update (Phase 1B, second attack pass, Area E) — measured directly,
+  status moved from unmeasured `OPEN FINDING` to `CONFIRMED` (measured);
+  still deliberately not fixed:** built
+  `backend/tests/test_scheduler_cycle_budget.py` to measure, not assume,
+  the actual behavior, per this pass's explicit instruction ("DO NOT
+  immediately add a timeout. First measure."). Two direct measurements
+  against the real `run_ingestion_cycle()` (only the network transport
+  faked):
+  1. `test_one_slow_source_delays_later_sources_in_the_same_cycle`: with
+     three due sources (one slow, two fast), the two fast sources' fetches
+     were not even *attempted* until the slow source's fetch had fully
+     finished, and the total cycle duration fully absorbed the slow
+     source's delay with no bound. **Confirms** the architectural
+     characteristic described above is real, not merely theoretical: the
+     per-source loop in `scheduler.py::run_ingestion_cycle` is strictly
+     sequential with no per-source timeout and no outer cycle deadline.
+  2. `test_single_source_retry_amplification_is_bounded_by_fetch_urls_own_retry_budget`:
+     a persistently-503-erroring source triggered **exactly** 4 fetch
+     attempts (matching `fetch_url`'s own `stop_after_attempt(4)`), not a
+     multiple of 4 — confirming the scheduler does **not** add a second
+     retry layer on top of `fetch_url`'s own retry budget. This is a
+     genuine, positive bound: retry amplification from a single failing
+     source is confined to that one function's own tenacity policy, not
+     compounded further by the calling code.
+  **Still deliberately not fixed** — no timeout was added to
+  `scheduler.py`, per the explicit instruction not to force an
+  architectural change without a demonstrated concrete violation
+  justifying the specific number chosen, and per "Do NOT merely add
+  arbitrary short timeouts that cause valid ingestion to fail." This
+  entry is now evidence-backed rather than an assumption; the underlying
+  architecture is unchanged.
 
 ### NVDA-01 — Live NVIDIA-call test can hang indefinitely, no enforced ceiling
 - **Severity:** Medium (reliability, not a security hole)
