@@ -92,13 +92,25 @@ is secure"; read it as "section X has not been attacked yet."
   4. End-to-end through the public `classify_event()` entrypoint — the
      exact method the original hang occurred in — proving the whole call,
      tenacity retries included, stays bounded (<15s) instead of hanging.
-- **Full test suite re-run after the fix:** 350 deterministic tests still
-  pass (0 regressions); the 23 existing *mocked* NVIDIA provider tests in
-  `test_nvidia_provider.py` still pass unchanged (constructor signature
-  gained new optional params, defaults preserve prior behavior); the
-  three live NVIDIA tests were re-run against the real endpoint with the
-  fix in place (see `docs/ENGINEERING_STATUS.md` Phase 0.4 for the
-  outcome recorded once that run completed).
+- **Full test suite re-run after the fix:** 350 deterministic tests pass
+  (0 regressions); the 23 existing *mocked* NVIDIA provider tests in
+  `test_nvidia_provider.py` pass unchanged (constructor signature gained
+  new optional params, defaults preserve prior behavior).
+- **Attacked the fix, found a real sizing bug in it:** the first attempt
+  to re-run the three live tests hit `pytest-timeout`'s own 240s safety
+  net mid-call. Investigated rather than dismissed: `classify_event`'s
+  true worst case is 3 tenacity attempts x the 100s hard deadline plus
+  backoff (~304s) — the test file's hardcoded `240` was less than that,
+  so the *new* safety net could fire before the *actual* fix's own
+  bounded retry logic had a chance to finish on a genuinely slow (not
+  hung) real request. Fixed by deriving the test timeout from
+  `NVIDIA_REQUEST_DEADLINE_SECONDS` (`3 * deadline + 60`) instead of a
+  separately-guessed number, in both `test_prompt_injection_semantic.py`
+  and `test_nvidia_relationship_eval.py`.
+- **Live confirmation, fresh run:** all three live tests against the real
+  NVIDIA endpoint — **passed, 100.88s total (~34s/test average)**, no
+  hangs, no timeouts. The earlier hangs were real; this run shows the
+  fix does not get in the way of normal-latency operation.
 - **Neighboring attack, still open:** the production ingestion path
   (`scheduler.py::run_ingestion_cycle`) still has no *outer* wall-clock
   budget around a full cycle — the new per-request deadline bounds each
@@ -332,33 +344,57 @@ is secure"; read it as "section X has not been attacked yet."
   Phase 10 attack: hold a write lock deliberately and confirm the retry
   loop's 3-attempt bound actually recovers.
 
-### DEPS-01 — `requirements.txt` still lists dependencies for the abandoned architecture
-- **Severity:** Low (hygiene/bloat, not exploitable — no evidence yet
-  that any of these executes untrusted input)
+### DEPS-01 — `requirements.txt` listed dependencies for the abandoned architecture, and separately was MISSING real ones
+- **Severity:** Low (hygiene/bloat side) / **Medium** (the missing-deps
+  side — a fresh `pip install -r requirements.txt` would not have
+  produced a working install)
 - **Area:** Phase 17 — dead code / dependency hygiene
-- **Status:** OPEN FINDING (identified, not yet acted on)
-- **Description:** `backend/requirements.txt` lists `psycopg[binary]`,
-  `celery`, `redis`, and `pgvector`. Nothing on the actual running
-  application's code path imports these unconditionally — `celery`/
-  `redis` are only referenced by `backend/app/worker/` (dead code, see
-  `docs/ARCHITECTURE.md` §6), and `pgvector` is imported inside a
-  `try/except ImportError` in both `backend/app/models/event.py` and
-  `backend/app/core/clustering.py`, with a working fallback already
-  exercised in this actual venv.
-- **Not fixed this session:** removing them is plausibly safe but wasn't
-  verified — `backend/app/worker/celery_app.py`/`tasks.py` would fail to
-  *import* without `celery`/`redis` installed (though nothing currently
-  imports `app.worker` either, per the same dead-code finding), and this
-  wasn't confirmed with an actual removal-and-retest pass before running
-  out of session time. Logged rather than acted on hastily, per the
-  operating brief's own instruction not to rush changes without
-  verification.
-- **Suggested next step:** confirm nothing imports `app.worker.*` (grep
-  already done informally, not yet exhaustive with the full test suite
-  run against a `pip uninstall` of these four packages), then either
-  remove them from `requirements.txt` or move them to a clearly-labeled
-  optional `requirements-future.txt` if the Celery scaffolding is worth
-  keeping importable for reference.
+- **Status:** FIXED (session 2, 2026-09-21)
+- **Description, unused-dependency side:** `backend/requirements.txt`
+  listed `psycopg[binary]`, `celery`, `redis`, and `pgvector`. Confirmed
+  by grep that nothing on the actual running application's code path
+  imports `psycopg` at all; `celery`/`redis` are only imported by
+  `backend/app/worker/celery_app.py`, which nothing else in the codebase
+  or test suite imports (fully dead code, see `docs/ARCHITECTURE.md` §6);
+  `pgvector`'s two usages (`app/models/event.py`, `app/core/clustering.py`)
+  are behind `except ImportError` fallbacks that a deliberate SQLite
+  check (`if settings.get_database_url().startswith("sqlite"): raise
+  ImportError(...)`) short-circuits **regardless of whether the package
+  is installed** — meaning the fallback path is already the only path
+  exercised in this product's actual configuration today, independent of
+  this finding.
+- **Description, missing-dependency side (found while fixing the
+  above):** `apscheduler`, `feedparser`, and `tenacity` — all genuinely
+  imported by real application code (`app/core/scheduler.py`,
+  `app/core/parser.py`, `app/core/providers/llm.py`/`fetcher.py`
+  respectively) — were **absent from `requirements.txt` entirely**. A
+  clean `pip install -r requirements.txt` followed by `python -m
+  app.main` would have failed with `ModuleNotFoundError` the moment the
+  scheduler or a feed parse ran. This had gone unnoticed because the
+  working `venv_312` had these installed some other way (not tracked to
+  a specific origin), masking the gap.
+- **Verification, not just inspection:** uninstalled `psycopg`,
+  `psycopg-binary`, `celery`, `redis`, `pgvector` from the working venv
+  and re-ran the full deterministic suite — **350 passed, 0 failed, no
+  change** — and confirmed `from app.main import app` still imports
+  cleanly. Then, to prove the *other* direction (completeness, not just
+  minimality), built a genuinely separate fresh venv, installed **only**
+  from the corrected `requirements.txt`, and re-ran the full deterministic
+  suite against it — **350 passed, 0 failed** — proving the trimmed file
+  is both minimal and complete, not just inspected-and-assumed.
+- **Fix:** `backend/requirements.txt` now lists exactly what's actually
+  imported (`fastapi`, `uvicorn`, `sqlalchemy`, `alembic`, `apscheduler`,
+  `feedparser`, `tenacity`, `pydantic`, `pydantic-settings`, `httpx`,
+  `python-dotenv`, `openai`, `pytest`, `pytest-timeout`), with a comment
+  block explaining exactly why `psycopg`/`celery`/`redis`/`pgvector` are
+  deliberately absent and what to do if a real Postgres/Celery migration
+  is ever undertaken (re-add them deliberately then, not as inherited
+  scaffolding).
+- **Neighboring attack:** worth periodically re-running the
+  fresh-venv-from-requirements.txt check as a lightweight CI step, since
+  this exact class of drift (a dependency silently available in a
+  long-lived dev venv but absent from the manifest) can reappear anytime
+  someone `pip install`s something ad hoc without updating the file.
 
 ### SECRET-EXPOSURE-01 — Live API key value printed to tool output (process incident, not a code defect)
 - **Severity:** N/A (operator error, not a product vulnerability) — logged

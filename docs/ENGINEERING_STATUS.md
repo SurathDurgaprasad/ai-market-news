@@ -228,11 +228,20 @@ limitation above tracked as a `KNOWN LIMITATION`, not swept under "fixed".
 
 | Check | Result |
 |---|---|
-| Backend deterministic tests | **350 passed, 13 skipped, 0 failed** (16.7s). Up from 354 total in session 1 to 366 (350+13+3 live-deselected) — 12 new tests added this session (8 log-redaction + 4 timeout-bound). |
-| Backend live NVIDIA tests (`test_prompt_injection_semantic.py`, 3 tests) | Run against the real endpoint with the new hard-deadline fix in place; see below — this table is completed once that run (started in background) finishes. |
+| Backend deterministic tests | **350 passed, 13 skipped, 0 failed** (~17-32s across several re-runs). Up from 354 total in session 1 to 366 (350+13+3 live-deselected) — 12 new tests added this session (8 log-redaction + 4 timeout-bound). Re-confirmed a second time after a mid-session environment restore (see below), and a third time from a genuinely fresh venv built only from the corrected `requirements.txt` — identical result every time. |
+| Backend live NVIDIA tests (`test_prompt_injection_semantic.py`, 3 tests) | **3 passed, 100.88s total (~34s/test average)**, real endpoint, hard-deadline fix in place. First attempt at this hit a sizing bug in the *test file's* timeout override (see `docs/RED_TEAM_REPORT.md` NVDA-01, "attacked the fix" note) — fixed, then re-run clean. |
 | Frontend `tsc --noEmit` | Clean, 0 errors. |
 | Frontend `eslint` | 0 errors, 2 pre-existing warnings (documented tradeoff, `IMG-01`). |
 | Frontend production build (`npm run build`) | **Succeeds, exit 0.** Home page correctly renders dynamically (`ƒ`, uses `cache: 'no-store'`); admin/sources page prerenders statically with an empty list when the backend is unreachable at build time (expected — its own `try/catch` already handles that, see the component). |
+
+**Mid-session interruption**: this session's environment was torn down
+and restored once (user hit a usage limit) while a background test run
+was in flight. No work was lost — all file edits persist on disk
+independent of running processes; git was not yet initialized as a
+persistent marker at that exact moment but all edits since the last
+commit were intact and re-verified (full deterministic suite re-run
+clean) before continuing. Noted here because it's exactly the kind of
+event that could have silently corrupted the record if not checked.
 
 **Deterministic vs live, made explicit**: only
 `test_prompt_injection_semantic.py`'s 3 tests make real network calls in
@@ -313,13 +322,16 @@ were found and fixed (all confirmed via reproduction before and after):
 - `DEAD-01` (`clustering.py`): unchanged — now formally documented as
   intentionally-kept future-path dead code in `docs/ARCHITECTURE.md` §6
   rather than left ambiguous.
-- New: `DEPS-01` (see `docs/RED_TEAM_REPORT.md`) — `requirements.txt`
-  still lists `psycopg[binary]`, `celery`, `redis`, `pgvector`, none of
-  which anything on the actual running code path imports unconditionally.
-  Not removed this session (risk of breaking `app/worker/`'s imports
-  without first confirming nothing depends on it was not yet checked)
-  — logged as `OPEN FINDING` for the next session rather than acted on
-  hastily.
+- `DEPS-01`: raised and `FIXED` in the same session (see
+  `docs/RED_TEAM_REPORT.md`) — `requirements.txt` no longer lists
+  `psycopg`/`celery`/`redis`/`pgvector` (confirmed unused by uninstalling
+  them and re-running the full suite: 350 passed, unchanged), and — found
+  as a byproduct of that check — now correctly lists `apscheduler`,
+  `feedparser`, `tenacity`, which were genuinely required but **absent**
+  from the original file entirely (a fresh install would have been
+  broken). Proven both directions: uninstall-and-retest for minimality,
+  fresh-venv-from-file-alone-and-retest for completeness. Both passed
+  350/0.
 
 #### Not yet started (honest scope statement, end of session 2)
 Phase 1 (architecture audit) is starting now, in this same session, per

@@ -2,14 +2,28 @@ fastapi==0.109.2
 uvicorn[standard]==0.27.0.post1
 sqlalchemy==2.0.25
 alembic==1.13.1
-psycopg[binary]>=3.2.10
-celery==5.3.6
-redis==5.0.1
+apscheduler==3.11.3
+feedparser==6.0.14
+tenacity==9.1.4
 pydantic==2.5.3
 pydantic-settings==2.1.0
 httpx==0.26.0
 python-dotenv==1.0.1
-pgvector==0.2.4
 openai==1.12.0
 pytest==8.0.0
 pytest-timeout==2.3.1
+
+# NOT installed: psycopg, celery, redis, pgvector. These were dependencies
+# for the originally-planned Postgres/pgvector/Redis/Celery architecture,
+# which was deliberately abandoned in favor of SQLite + in-process
+# APScheduler (see docs/ARCHITECTURE.md, docs/RED_TEAM_REPORT.md DEPS-01).
+# Confirmed safe to remove: nothing outside app/worker/ (itself dead code,
+# imported by nothing) imports celery/redis; psycopg is never imported
+# anywhere; pgvector's two usages (app/core/clustering.py,
+# app/models/event.py) are already behind an `except ImportError` fallback
+# that a deliberate SQLite check short-circuits regardless of whether the
+# package is installed. Verified by uninstalling all four and re-running
+# the full deterministic test suite (350 passed, 0 failed, no change) and
+# confirming `from app.main import app` still imports cleanly.
+# If a real Celery/Redis/Postgres/pgvector migration is ever undertaken,
+# re-add these deliberately then — not as leftover scaffolding.
