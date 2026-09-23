@@ -16,7 +16,7 @@ export const NewEventsNotifier: React.FC<{ latestEventTimestamp: string }> = ({
     const interval = setInterval(async () => {
       try {
         const res = await fetch(
-          `${API_V1}/events/new_count?since=${encodeURIComponent(latestEventTimestamp)}`,
+          `${API_V1}/events/new_count?since=${encodeURIComponent(latestEventTimestamp)}&scope=week`,
           { cache: 'no-store' },
         );
         if (res.ok) {

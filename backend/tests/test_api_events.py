@@ -635,3 +635,68 @@ def test_api_image_role_from_url_evidence():
     assert by_id[str(none_img.id)]["image_role"] == "none"
     assert by_id[str(missing.id)]["image_role"] == "none"
     assert by_id[str(none_img.id)]["image_url"]  # URL still returned; UI decides not to display it
+
+
+def test_week_scope_keeps_current_week_and_drops_older_and_offtopic():
+    """The intelligence feed is the current week, newest first, AI developments only."""
+    from app.core.feed import current_week_start
+
+    db = _TestingSessionLocal()
+    primary = _make_source(db, name="OpenAI Blog", url="https://openai.com/news/rss.xml")
+    community = _make_source(
+        db, name="Hacker News", url="https://news.ycombinator.com/rss"
+    )
+    community.tier = "community"
+    db.commit()
+
+    start = current_week_start()
+    fresh = _make_event(
+        db,
+        primary,
+        headline="OpenAI releases a new reasoning model",
+        short_summary="OpenAI released a reasoning model with a longer context window.",
+        event_time=start + datetime.timedelta(days=1, hours=3),
+        importance_score=95,
+    )
+    later_minor = _make_event(
+        db,
+        primary,
+        headline="A lab publishes a small benchmark",
+        short_summary="The benchmark covers a narrow coding task.",
+        event_time=start + datetime.timedelta(days=2, hours=1),
+        importance_score=30,
+    )
+    older_pub = _make_event(
+        db,
+        primary,
+        headline="OpenAI releases an older model",
+        short_summary="An earlier model release from last month.",
+        event_time=start - datetime.timedelta(days=2),
+        importance_score=95,
+        created_at=start + datetime.timedelta(hours=1),
+    )
+    offtopic = _make_event(
+        db,
+        community,
+        headline="People Turn to Cigarettes to Quit Vaping",
+        short_summary="A personal story about nicotine habits.",
+        event_time=start + datetime.timedelta(days=1, hours=4),
+        importance_score=90,
+    )
+    db.close()
+
+    response = client.get("/api/v1/events/?scope=week&limit=50")
+    assert response.status_code == 200
+    headlines = [item["headline"] for item in response.json()]
+    assert headlines == [
+        "A lab publishes a small benchmark",
+        "OpenAI releases a new reasoning model",
+    ]
+    assert str(fresh.id) and str(later_minor.id)
+    assert older_pub.headline not in headlines
+    assert offtopic.headline not in headlines
+
+    # Default list still includes older and off-topic rows; week scope is opt-in.
+    everything = [item["headline"] for item in client.get("/api/v1/events/?limit=20").json()]
+    assert "OpenAI releases an older model" in everything
+    assert "People Turn to Cigarettes to Quit Vaping" in everything

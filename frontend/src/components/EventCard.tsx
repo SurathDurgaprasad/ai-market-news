@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { factualSummary, formatUtcDay } from '@/lib/time';
+import { factualSummary, formatUtcClock, formatUtcDay } from '@/lib/time';
+import { evidenceLabel } from '@/lib/sources';
 import {
   cardImageClass,
   entityPreview,
@@ -53,7 +54,14 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
     safeHttpUrl(event.article_url) ||
     safeHttpUrl(displaySource?.url) ||
     safeHttpUrl(event.primary_source?.url);
-  const displayTime = formatUtcDay(event.event_time ?? event.created_at);
+  const sourceLabel = evidenceLabel({
+    url: officialHref,
+    tier: displaySource?.tier,
+    official: Boolean(event.official_source),
+  });
+  const displayTime =
+    formatUtcClock(event.event_time ?? event.created_at) ||
+    formatUtcDay(event.event_time ?? event.created_at);
   const summary = factualSummary(event.short_summary);
   const href = `/events/${event.id}`;
   const entities = entityPreview(event.entities, 3);
@@ -141,10 +149,10 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
             href={officialHref}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={`Open official source: ${displaySource?.name ?? 'source'}`}
+            aria-label={`${sourceLabel}: ${displaySource?.name ?? 'source'}`}
             className="shrink-0 text-[13px] text-zinc-300 transition-colors hover:text-sky-300 focus-visible:text-sky-300"
           >
-            Official source
+            {sourceLabel}
           </a>
         ) : null}
       </div>

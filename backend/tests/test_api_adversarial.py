@@ -37,7 +37,7 @@ def client():
 
 def test_api_pagination_limits(client):
     # Attempting to fetch 10,000 items at once should be rejected
-    # because `limit` has `le=100` validation in FastAPI.
+    # because `limit` has an upper bound in FastAPI.
     response = client.get("/api/v1/events/?limit=10000")
     assert response.status_code == 422  # Unprocessable Entity
 

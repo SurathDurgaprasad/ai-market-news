@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { API_V1 } from '@/lib/api';
 import { formatCitation } from '@/lib/citations';
 import { detailImageClass, importanceMeta, type ImageRole } from '@/lib/importance';
+import { evidenceLabel } from '@/lib/sources';
 import { factualSummary, formatUtcMeta } from '@/lib/time';
 import { safeHttpUrl } from '@/lib/urls';
 
@@ -85,6 +86,11 @@ export default async function EventDetailPage({
     : [];
   const sourceName =
     event.official_source?.name || event.primary_source?.name || 'Unknown source';
+  const primaryLabel = evidenceLabel({
+    url: officialHref,
+    tier: event.official_source?.tier || event.primary_source?.tier,
+    official: Boolean(event.official_source) || event.primary_source?.tier === 'primary',
+  });
 
   return (
     <main className="min-h-screen bg-[#070708] text-zinc-100 selection:bg-sky-500/30">
@@ -215,14 +221,14 @@ export default async function EventDetailPage({
                     href={officialHref}
                     target="_blank"
                     rel="noopener noreferrer"
-                    aria-label={`Open official source: ${sourceName}`}
+                    aria-label={`${primaryLabel}: ${sourceName}`}
                     className="inline-flex w-fit items-center gap-2 text-sm font-medium text-sky-400 transition-colors hover:text-sky-300"
                   >
-                    Open official source
+                    {primaryLabel}
                     <span aria-hidden="true">↗</span>
                   </a>
                 ) : (
-                  <p className="text-sm text-zinc-400">No official source URL.</p>
+                  <p className="text-sm text-zinc-400">No source URL.</p>
                 )}
 
                 {citations.length > 0 ? (
@@ -266,19 +272,27 @@ export default async function EventDetailPage({
                         title: string;
                         url: string;
                         source_name: string;
+                        source_tier?: string;
                         link_type: string;
                       },
                       idx: number,
                     ) => {
                       const href = safeHttpUrl(article.url);
+                      const label = evidenceLabel({
+                        url: href,
+                        tier: article.source_tier,
+                      });
                       return (
                         <li key={idx} className="flex flex-col gap-0.5">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                            {label}
+                          </span>
                           {href ? (
                             <a
                               href={href}
                               target="_blank"
                               rel="noopener noreferrer"
-                              aria-label={`Open supporting source: ${article.source_name}`}
+                              aria-label={`${label}: ${article.source_name}`}
                               className="text-sm text-sky-400 hover:text-sky-300"
                             >
                               {article.source_name}

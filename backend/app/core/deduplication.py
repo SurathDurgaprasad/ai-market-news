@@ -220,6 +220,15 @@ def titles_have_contrasting_claims(title1: str, title2: str) -> bool:
     return False
 
 
+def content_tokens(title: str) -> set[str]:
+    """Lowercased headline words with stop words and punctuation removed."""
+    if not title:
+        return set()
+    text = title.lower().replace("-", " ")
+    text = re.sub(r"[^\w\s]", "", text)
+    return {word for word in text.split() if word and word not in STOP_WORDS}
+
+
 def titles_are_safe_lexical_match(title1: str, title2: str, threshold: float = 0.85) -> bool:
     """
     True only when a Jaccard title match is safe to treat as the same event
@@ -230,9 +239,10 @@ def titles_are_safe_lexical_match(title1: str, title2: str, threshold: float = 0
     - no conflicting markers (H200 vs B200, $6.6B vs $6.6M)
     - no contrasting claims about the same subject (approved vs blocked,
       negation asymmetry) — see titles_have_contrasting_claims
-    - at least one shared distinctive marker (model/code/magnitude)
-
-    Generic headlines ("OpenAI Announces Update") must not fast-path merge.
+    - either a shared distinctive marker (model/code/magnitude) OR a long
+      shared content-word overlap (the same investigation headline republished
+      with no product code). Generic headlines ("OpenAI Announces Update")
+      have too few content words and must not fast-path merge.
     """
     if not is_duplicate_title(title1, title2, threshold=threshold):
         return False
@@ -242,9 +252,112 @@ def titles_are_safe_lexical_match(title1: str, title2: str, threshold: float = 0
         return False
     m1 = extract_event_markers(title1)
     m2 = extract_event_markers(title2)
-    if not m1 or not m2:
+    if m1 and m2 and (m1 & m2):
+        return True
+    return len(content_tokens(title1) & content_tokens(title2)) >= 5
+
+
+_RELEASE_LEAD = re.compile(
+    r"^(?:the\s+)?(?:introduction|release|launch|announcement)\s+of\s+",
+    re.IGNORECASE,
+)
+_RELEASE_GENERIC = {"model", "models", "llm", "llms", "ai"}
+
+
+def _release_core(title: str) -> Optional[list[str]]:
+    """
+    Content words of a release-style headline, or None if the title is not
+    phrased as 'Introduction/Release/Launch/Announcement of ...'.
+    """
+    raw = (title or "").strip()
+    if not raw or not _RELEASE_LEAD.match(raw):
+        return None
+    rest = _RELEASE_LEAD.sub("", raw).lower()
+    rest = re.sub(r"[^\w\s.]", " ", rest)
+    words: list[str] = []
+    for word in rest.split():
+        word = word.strip(".")
+        if not word or word in STOP_WORDS or word in _RELEASE_GENERIC:
+            continue
+        words.append(word)
+    if len(words) < 3:
+        return None
+    return words
+
+
+def titles_are_same_release_wording(title1: str, title2: str) -> bool:
+    """
+    Same named release written as 'Release of X' vs 'Introduction of X model'.
+
+    Both titles must use that lead-in. A later availability note
+    ('now available on Bedrock') and a program that uses the model do not match.
+    """
+    left = _release_core(title1)
+    right = _release_core(title2)
+    if not left or not right:
         return False
-    return bool(m1 & m2)
+    if titles_suggest_different_events(title1, title2):
+        return False
+    if titles_have_contrasting_claims(title1, title2):
+        return False
+    shared = set(left) & set(right)
+    union = set(left) | set(right)
+    if not union:
+        return False
+    return len(shared) / len(union) >= 0.8
+
+
+def titles_are_same_outlet_paraphrase(title1: str, title2: str) -> bool:
+    """
+    Same outlet restating one story ('Failures of US Border Surveillance' vs
+    'Failures in US-Mexico Border Surveillance').
+
+    Callers must already know the articles share a source. High overlap of
+    specific words is required so two different posts from one blog do not merge.
+    """
+    if titles_suggest_different_events(title1, title2):
+        return False
+    if titles_have_contrasting_claims(title1, title2):
+        return False
+    left = content_tokens(title1)
+    right = content_tokens(title2)
+    if len(left) < 5 or len(right) < 5:
+        return False
+    shared = left & right
+    union = left | right
+    if len(shared) < 5 or not union:
+        return False
+    if len(shared) / len(union) < 0.5:
+        return False
+    # A swapped subject ("Baseten" vs "DeepInfra" on the same headline template)
+    # puts a unique token on both sides. A republished story only adds modifiers.
+    only_left = left - right
+    only_right = right - left
+    if only_left and only_right:
+        return False
+    return len(only_left or only_right) <= 2
+
+
+_VERSIONED_NAME = re.compile(
+    r"\b([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,4}\s+\d+(?:\.\d+)+)\b"
+)
+
+
+def title_versioned_entities(title: str) -> list[str]:
+    """
+    Product names with a version in the headline ('Claude Opus 5.5').
+
+    Used only when the classifier returned no entities, so a second article
+    about the same named release can still reach relationship classification.
+    """
+    if not title:
+        return []
+    found: list[str] = []
+    for match in _VERSIONED_NAME.findall(title):
+        name = re.sub(r"\s+", " ", match).strip()
+        if name and name not in found:
+            found.append(name)
+    return found[:4]
 
 
 _MIN_CITATION_LENGTH = 15  # characters — shorter citations are meaninglessly broad

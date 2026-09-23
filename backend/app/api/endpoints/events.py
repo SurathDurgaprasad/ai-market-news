@@ -12,6 +12,7 @@ from app.models.source import Source
 from app.core.urls import sanitize_http_url
 from app.core.presentation import classify_image_role, present_citations
 from app.core.origin import resolve_originating_source
+from app.core.feed import current_week_start, is_feed_in_scope
 
 router = APIRouter()
 
@@ -210,14 +211,25 @@ def _build_linked_articles(db: Session, event_id) -> List[LinkedArticleResponse]
     return result
 
 
+def _in_current_week(query, now: Optional[datetime] = None):
+    """Keep events whose real-world time falls in the current ISO week (UTC)."""
+    start = current_week_start(now)
+    occurred = func.coalesce(Event.event_time, Event.created_at)
+    return query.filter(occurred >= start)
+
+
 @router.get("/", response_model=List[EventResponse])
 def get_events(
     db: Session = Depends(get_db),
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=250),
     min_importance: Optional[int] = Query(None, ge=0, le=100),
     q: Optional[str] = Query(None, description="Search keyword"),
-    organization_id: Optional[str] = None
+    organization_id: Optional[str] = None,
+    scope: Optional[Literal["week"]] = Query(
+        None,
+        description="week = current ISO week, newest first, AI developments only",
+    ),
 ):
     """
     Retrieve paginated high-signal events.
@@ -225,11 +237,15 @@ def get_events(
     Ordered by real-world event_time (fallback created_at), newest first.
     Superseded versions and events with an empty short_summary are excluded.
     Incomplete rows remain addressable by ID on the detail endpoint.
+    scope=week limits the feed to the current Monday–Sunday UTC week and
+    drops non-AI items from secondary and community sources.
     """
     query = db.query(Event).options(joinedload(Event.primary_source)).filter(
         Event.superseded_by_id.is_(None)
     )
     query = _high_signal(query)
+    if scope == "week":
+        query = _in_current_week(query)
 
     if min_importance is not None:
         query = query.filter(Event.importance_score >= min_importance)
@@ -247,6 +263,16 @@ def get_events(
         query = query.filter(Source.organization_id == organization_id)
 
     events = _order_by_real_world_time(query).offset(skip).limit(limit).all()
+    if scope == "week":
+        events = [
+            event
+            for event in events
+            if is_feed_in_scope(
+                event.headline,
+                event.short_summary,
+                event.primary_source.tier if event.primary_source else None,
+            )
+        ]
 
     # Linked articles are omitted from the list view for performance.
     # They are populated in the single-event detail endpoint.
@@ -256,7 +282,8 @@ def get_events(
 @router.get("/new_count", response_model=dict)
 def get_new_events_count(
     since: datetime,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    scope: Optional[Literal["week"]] = Query(None),
 ):
     """
     Returns the count of non-superseded events created after the given timestamp.
@@ -282,15 +309,29 @@ def get_new_events_count(
       Product decision: material updates are a new canonical version, not a
       silent in-place edit, so the "N new events" chip can surface them.
     """
-    count = (
-        _high_signal(
-            db.query(Event).filter(
-                Event.created_at > since,
-                Event.superseded_by_id.is_(None),
-            )
-        ).count()
+    query = _high_signal(
+        db.query(Event).filter(
+            Event.created_at > since,
+            Event.superseded_by_id.is_(None),
+        )
     )
-    return {"new_events_count": count}
+    if scope == "week":
+        rows = (
+            _in_current_week(query)
+            .options(joinedload(Event.primary_source))
+            .all()
+        )
+        count = sum(
+            1
+            for event in rows
+            if is_feed_in_scope(
+                event.headline,
+                event.short_summary,
+                event.primary_source.tier if event.primary_source else None,
+            )
+        )
+        return {"new_events_count": count}
+    return {"new_events_count": query.count()}
 
 
 @router.get("/{event_id}", response_model=EventResponse)

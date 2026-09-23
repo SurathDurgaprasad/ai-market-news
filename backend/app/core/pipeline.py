@@ -13,6 +13,9 @@ from app.core.deduplication import (
     verify_citations,
     fallback_source_citations,
     titles_are_safe_lexical_match,
+    titles_are_same_outlet_paraphrase,
+    titles_are_same_release_wording,
+    title_versioned_entities,
     first_factual_line,
     first_source_excerpt,
 )
@@ -142,7 +145,16 @@ class IntelligencePipeline:
         
         if not is_same_url_update:
             for ra in recent_articles:
-                if not titles_are_safe_lexical_match(title, ra.title, threshold=0.85):
+                same_outlet = (
+                    ra.source_id == source_id
+                    and titles_are_same_outlet_paraphrase(title, ra.title)
+                )
+                same_release = titles_are_same_release_wording(title, ra.title)
+                if not (
+                    titles_are_safe_lexical_match(title, ra.title, threshold=0.85)
+                    or same_outlet
+                    or same_release
+                ):
                     continue
                 from app.models.event import EventArticle
                 link = self.db.query(EventArticle).filter(EventArticle.article_id == ra.id).first()
@@ -299,6 +311,16 @@ class IntelligencePipeline:
                             )
                             return live_ev
                 return None
+
+            if classification is not None and not classification.entities:
+                named = list(getattr(classification, "primary_entities", None) or [])
+                named.extend(title_versioned_entities(title))
+                deduped = []
+                for item in named:
+                    if isinstance(item, str) and item and item not in deduped:
+                        deduped.append(item)
+                if deduped:
+                    classification.entities = deduped
 
             if not matched_event:
                 matched_event = find_semantic_match()

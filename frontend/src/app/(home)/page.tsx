@@ -1,11 +1,11 @@
 import { EventCard, type EventCardData } from '@/components/EventCard';
 import { NewEventsNotifier } from '@/components/NewEventsNotifier';
 import { API_V1 } from '@/lib/api';
-import { formatUtcInstrument, latestCreatedAt } from '@/lib/time';
+import { formatUtcInstrument, groupFeedByRecency, latestCreatedAt } from '@/lib/time';
 
 async function getEvents() {
   try {
-    const res = await fetch(`${API_V1}/events/?limit=40`, {
+    const res = await fetch(`${API_V1}/events/?scope=week&limit=200`, {
       cache: 'no-store',
     });
 
@@ -27,6 +27,8 @@ export default async function Home() {
     events && events.length > 0
       ? formatUtcInstrument(events[0].event_time ?? events[0].created_at)
       : '';
+  const sections =
+    events && events.length > 0 ? groupFeedByRecency(events, new Date().toISOString()) : [];
 
   return (
     <main className="min-h-screen bg-[#070708] text-zinc-100 selection:bg-sky-500/30">
@@ -70,7 +72,9 @@ export default async function Home() {
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-400">
               Latest developments
             </h2>
-            <p className="mt-2 text-sm text-zinc-400">Scan → Investigate → Verify</p>
+            <p className="mt-2 text-sm text-zinc-400">
+              This week · newest first · times in UTC
+            </p>
           </div>
           {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
         </div>
@@ -86,9 +90,37 @@ export default async function Home() {
             <p className="mt-1 text-sm">The ingestion pipeline has not produced any canonical events.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {events.map((event) => (
-              <EventCard key={event.id} event={event} />
+          <div className="space-y-12">
+            {sections.map((section) => (
+              <section key={section.id} aria-labelledby={`section-${section.id}`}>
+                <div className="mb-5 border-b border-white/[0.08] pb-3">
+                  <h3
+                    id={`section-${section.id}`}
+                    className="text-[12px] font-semibold uppercase tracking-[0.2em] text-zinc-200"
+                  >
+                    {section.title}
+                  </h3>
+                  {section.subtitle ? (
+                    <p className="mt-1 text-[12px] tracking-wide text-zinc-500">{section.subtitle}</p>
+                  ) : null}
+                </div>
+                <div className="space-y-8">
+                  {section.days.map((day) => (
+                    <div key={day.key}>
+                      {day.label ? (
+                        <h4 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">
+                          {day.label}
+                        </h4>
+                      ) : null}
+                      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+                        {day.events.map((event) => (
+                          <EventCard key={event.id} event={event} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}
