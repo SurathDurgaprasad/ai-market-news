@@ -81,6 +81,45 @@ def test_ambiguous_origin_multiple_outlets_without_publisher():
     assert origin.display_name == "TechCrunch"
 
 
+def test_title_suffix_needs_page_corroboration_and_then_resolves():
+    from app.core.origin import evidence_tier_for_origin
+
+    bare = "<title>Introducing a model \\ Example Lab</title>"
+    assert extract_publisher_from_html(bare) == ""
+    html = """
+    <title>Introducing a model \\ Example Lab</title>
+    <meta name="twitter:site" content="@ExampleLabAI">
+    <meta property="og:image:alt" content="Example Lab logo">
+    """
+    assert extract_publisher_from_html(html) == "Example Lab"
+    origin = resolve_originating_source(
+        ingest_name="Hacker News",
+        ingest_url="https://news.ycombinator.com/rss",
+        article_url="https://www.examplelab.com/model",
+        publisher_name="Example Lab",
+    )
+    assert origin.used_official is True
+    assert origin.official_name == "Example Lab"
+    assert origin.official_url == "https://www.examplelab.com/model"
+    assert evidence_tier_for_origin(origin, {"examplelab.com"}) == "primary"
+
+
+def test_preprint_origin_is_research_when_the_publisher_is_on_the_page():
+    from app.core.origin import evidence_tier_for_origin
+
+    html = '<meta property="og:site_name" content="arXiv.org">'
+    assert extract_publisher_from_html(html) == "arXiv.org"
+    origin = resolve_originating_source(
+        ingest_name="Hacker News",
+        ingest_url="https://news.ycombinator.com/rss",
+        article_url="https://arxiv.org/abs/0000.00000",
+        publisher_name="arXiv.org",
+    )
+    assert origin.used_official is True
+    assert evidence_tier_for_origin(origin, set()) == "research"
+    assert evidence_tier_for_origin(origin, set()) != "primary"
+
+
 def test_extract_publisher_from_html_og_and_jsonld():
     html = '<meta property="og:site_name" content="Hacktron">'
     assert extract_publisher_from_html(html) == "Hacktron"

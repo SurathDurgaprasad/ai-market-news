@@ -308,6 +308,93 @@ def titles_are_same_release_wording(title1: str, title2: str) -> bool:
     return len(shared) / len(union) >= 0.8
 
 
+_DISTRIBUTION_PHRASE = re.compile(
+    r"\b(available on|now available|released on)\b",
+    re.IGNORECASE,
+)
+_YEAR_TOKEN = re.compile(r"^(19|20)\d{2}$")
+
+
+def _normalized_content_words(title: str) -> list[str]:
+    text = (title or "").lower()
+    text = re.sub(r"u\.s\.?", "us ", text)
+    text = text.replace("-", " ").replace(".", " ")
+    text = re.sub(r"\s+", " ", text)
+    words = []
+    for word in text.split():
+        if not word or word in STOP_WORDS or _YEAR_TOKEN.match(word):
+            continue
+        words.append(word)
+    return words
+
+
+def _content_ngrams(words: list[str], size: int) -> set[str]:
+    if len(words) < size:
+        return set()
+    return {" ".join(words[index : index + size]) for index in range(len(words) - size + 1)}
+
+
+def classify_headline_relationship(
+    title1: str,
+    title2: str,
+    kind1: str = "",
+    kind2: str = "",
+) -> str:
+    """
+    Deterministic relationship for two headlines.
+
+    SAME_EVENT is one underlying development told with different punctuation,
+    framing, or wording. UPDATE_TO_SAME_EVENT is a later distribution of a
+    release. DIFFERENT_EVENT covers a new incident, a separate investigation,
+    a research note versus a product release, and a security incident versus
+    a launch. Marker conflicts and contrasting claims stay in force.
+    """
+    from app.core.providers.llm import EventRelationship
+
+    if titles_suggest_different_events(title1, title2):
+        return EventRelationship.DIFFERENT_EVENT
+    if titles_have_contrasting_claims(title1, title2):
+        return EventRelationship.DIFFERENT_EVENT
+
+    kinds = {(kind1 or "").strip().lower(), (kind2 or "").strip().lower()}
+    kinds.discard("")
+    incompatible = {
+        frozenset({"security_incident", "model_release"}),
+        frozenset({"security_incident", "model_family"}),
+        frozenset({"security_incident", "hardware_platform"}),
+        frozenset({"security_incident", "research"}),
+        frozenset({"research", "model_release"}),
+        frozenset({"research", "model_family"}),
+        frozenset({"research", "hardware_platform"}),
+    }
+    split_kinds = kinds in incompatible
+
+    distributed = _DISTRIBUTION_PHRASE.search(title1 or "")
+    other_distributed = _DISTRIBUTION_PHRASE.search(title2 or "")
+    if bool(distributed) != bool(other_distributed):
+        left = set(_normalized_content_words(title1))
+        right = set(_normalized_content_words(title2))
+        if len(left & right) >= 3:
+            return EventRelationship.UPDATE_TO_SAME_EVENT
+
+    if titles_are_safe_lexical_match(title1, title2) or titles_are_same_release_wording(title1, title2):
+        if split_kinds:
+            return EventRelationship.DIFFERENT_EVENT
+        return EventRelationship.SAME_EVENT
+
+    if split_kinds:
+        return EventRelationship.DIFFERENT_EVENT
+
+    words1 = _normalized_content_words(title1)
+    words2 = _normalized_content_words(title2)
+    shared = set(words1) & set(words2)
+    if len(shared) >= 4 and _content_ngrams(words1, 4) & _content_ngrams(words2, 4):
+        return EventRelationship.SAME_EVENT
+    if len(shared) >= 4 and _content_ngrams(words1, 3) & _content_ngrams(words2, 3):
+        return EventRelationship.SAME_EVENT
+    return EventRelationship.DIFFERENT_EVENT
+
+
 def titles_are_same_outlet_paraphrase(title1: str, title2: str) -> bool:
     """
     Same outlet restating one story ('Failures of US Border Surveillance' vs

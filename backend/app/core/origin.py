@@ -116,6 +116,56 @@ def same_registrable_host(a: str, b: str) -> bool:
     return bool(pa and pb and pa == pb)
 
 
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_TITLE_SPLIT = re.compile(r"\s+(?:\\|\||—|–|-)\s+")
+_META_ATTR = re.compile(
+    r'<meta\b([^>]*?\b(?:name|property)=["\']([^"\']+)["\'][^>]*)>',
+    re.IGNORECASE,
+)
+_CONTENT_ATTR = re.compile(r'\bcontent=["\']([^"\']*)["\']', re.IGNORECASE)
+
+
+def _meta_content(html: str, key: str) -> str:
+    wanted = key.lower()
+    for attrs, name in _META_ATTR.findall(html or ""):
+        if name.lower() != wanted:
+            continue
+        found = _CONTENT_ATTR.search(attrs)
+        if found:
+            return re.sub(r"\s+", " ", found.group(1)).strip()
+    return ""
+
+
+def _corroborated_title_publisher(html: str) -> str:
+    """
+    Publisher from the title suffix when another tag on the same page agrees.
+
+    'Introducing a model \\ Example Lab' plus twitter:site @ExampleLab is page
+    evidence. A title suffix alone is not, and the domain is never used.
+    """
+    match = _TITLE.search(html or "")
+    if not match:
+        return ""
+    title = re.sub(r"\s+", " ", match.group(1)).strip()
+    parts = [part.strip() for part in _TITLE_SPLIT.split(title) if part.strip()]
+    if len(parts) < 2:
+        return ""
+    suffix = parts[-1]
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9 .&]{1,40}", suffix):
+        return ""
+    suffix_key = re.sub(r"[^a-z0-9]", "", suffix.lower())
+    if len(suffix_key) < 4:
+        return ""
+    handle = _meta_content(html, "twitter:site").lstrip("@")
+    handle_key = re.sub(r"[^a-z0-9]", "", handle.lower())
+    alt = _meta_content(html, "og:image:alt").lower()
+    handle_agrees = bool(handle_key) and handle_key.startswith(suffix_key)
+    logo_agrees = suffix_key in re.sub(r"[^a-z0-9]", "", alt) and "logo" in alt
+    if handle_agrees or logo_agrees:
+        return suffix[:120]
+    return ""
+
+
 def extract_publisher_from_html(html: Optional[str]) -> str:
     if not html:
         return ""
@@ -130,7 +180,7 @@ def extract_publisher_from_html(html: Optional[str]) -> str:
         name = re.sub(r"\s+", " ", match.group(1)).strip()
         if name:
             return name[:120]
-    return ""
+    return _corroborated_title_publisher(html)
 
 
 def resolve_originating_source(
@@ -184,3 +234,26 @@ def resolve_originating_source(
         display_url=article_url or ingest_url,
         used_official=False,
     )
+
+
+# Preprint archives are the document, not a news outlet. The host is used
+# only after origin resolution has already accepted page-evidence publisher.
+_PREPRINT_HOSTS = {"arxiv.org"}
+
+
+def evidence_tier_for_origin(origin: OriginResolution, primary_hosts: set[str]) -> Optional[str]:
+    """
+    Tier of a validated official origin.
+
+    A stored article URL is not enough. Resolution must have accepted a
+    publisher from page evidence. The host then selects primary when it
+    matches a registered primary source, or research for a preprint archive.
+    """
+    if not origin.used_official:
+        return None
+    host = host_of(origin.official_url or origin.display_url)
+    if host and any(same_registrable_host(host, item) for item in primary_hosts if item):
+        return "primary"
+    if host in _PREPRINT_HOSTS or host.endswith(".arxiv.org"):
+        return "research"
+    return None

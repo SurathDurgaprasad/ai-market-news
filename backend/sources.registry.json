@@ -21,7 +21,7 @@
   {"organization": "MIT Technology Review", "name": "MIT Technology Review AI", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed/", "tier": "secondary", "polling_tier": "medium", "enabled": true},
   {"organization": "MIT Technology Review", "name": "MIT Technology Review", "url": "https://www.technologyreview.com/feed/", "tier": "secondary", "polling_tier": "medium", "enabled": true},
   {"organization": "VentureBeat", "name": "VentureBeat AI", "url": "https://venturebeat.com/ai/feed/", "tier": "secondary", "polling_tier": "high", "enabled": true},
-  {"organization": "Wired", "name": "Wired AI", "url": "https://www.wired.com/feed/tag/ai/rss", "tier": "secondary", "polling_tier": "medium", "enabled": true},
+  {"organization": "Wired", "name": "Wired AI", "url": "https://www.wired.com/feed/category/business/artificial-intelligence/rss", "tier": "secondary", "polling_tier": "medium", "enabled": true},
   {"organization": "IEEE Spectrum", "name": "IEEE Spectrum AI", "url": "https://spectrum.ieee.org/feeds/topic/artificial-intelligence.rss", "tier": "secondary", "polling_tier": "medium", "enabled": true},
   {"organization": "Hacker News", "name": "Hacker News", "url": "https://news.ycombinator.com/rss", "tier": "community", "polling_tier": "high", "enabled": true}
 ]

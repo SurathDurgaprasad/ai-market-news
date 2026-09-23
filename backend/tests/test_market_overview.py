@@ -1,7 +1,14 @@
 """Overview counts come from canonical events, not article copies."""
 from datetime import datetime, timezone
 
-from app.core.market import MarketEvent, build_market_overview, market_category, source_availability
+from app.core.market import (
+    MarketEvent,
+    _cluster_map,
+    _display_organization,
+    build_market_overview,
+    market_category,
+    source_availability,
+)
 
 
 def _event(
@@ -55,7 +62,7 @@ def test_one_publisher_does_not_invent_a_trend_from_copies():
 def test_two_publishers_can_trend_a_real_category():
     overview = build_market_overview(
         [
-            _event("a", "Lab publishes an agent benchmark", 70, TODAY, kind="research", entities=["OpenAI"], source_name="OpenAI Blog", tiers=["primary"], summary="A new agent benchmark."),
+            _event("a", "Lab publishes an agent benchmark", 70, TODAY, kind="capability", entities=["OpenAI"], source_name="OpenAI Blog", tiers=["primary"], summary="A new agent benchmark."),
             _event("b", "Vendor ships a support agent for operations", 70, YESTERDAY, kind="capability", source_name="MIT Technology Review", tiers=["secondary"], summary="A separate support agent for operations."),
         ],
         now=NOW,
@@ -173,22 +180,19 @@ def test_a_name_in_the_entity_list_alone_is_not_that_players_development():
 
 
 def test_a_lone_roundup_is_labeled_with_its_publisher():
-    overview = build_market_overview(
-        [
-            _event(
-                "roundup",
-                "Survey of labs",
-                60,
-                TODAY,
-                entities=["OpenAI", "Anthropic", "Meta", "Google"],
-                source_name="Hacker News",
-                org="Hacker News",
-                tiers=["community"],
-            ),
-        ],
-        now=NOW,
+    event = _event(
+        "roundup",
+        "Survey of labs",
+        60,
+        TODAY,
+        entities=["OpenAI", "Anthropic", "Meta", "Google"],
+        source_name="Hacker News",
+        org="Hacker News",
+        tiers=["community"],
     )
-    assert overview["happening_now"][0]["organization"] == "Hacker News"
+    overview = build_market_overview([event], now=NOW)
+    assert overview["happening_now"] == []
+    assert _display_organization(event) == "Hacker News"
 
 
 def test_discussion_does_not_lead_when_direct_developments_exist():
@@ -237,8 +241,8 @@ def test_recent_cluster_is_reported_as_a_count():
     third = datetime(2026, 9, 22, 20, 0, tzinfo=timezone.utc)
     overview = build_market_overview(
         [
-            _event("a", "First agent benchmark", 70, TODAY, kind="research", summary="An agent benchmark.", source_name="OpenAI Blog", tiers=["primary"]),
-            _event("b", "Second agent note", 60, YESTERDAY, kind="research", summary="Another agent result.", source_name="MIT Technology Review", tiers=["secondary"]),
+            _event("a", "First agent benchmark", 70, TODAY, kind="capability", summary="An agent benchmark.", source_name="OpenAI Blog", tiers=["primary"]),
+            _event("b", "Second agent note", 70, YESTERDAY, kind="capability", summary="Another agent result.", source_name="MIT Technology Review", tiers=["secondary"]),
             _event("c", "Third agent result", 70, third, kind="capability", summary="A further agent result.", source_name="The Verge", tiers=["secondary"]),
         ],
         now=NOW,
@@ -429,7 +433,75 @@ def test_a_second_major_release_is_not_crowded_out():
     now_ids = [item["id"] for item in overview["happening_now"]]
     assert "first" in now_ids
     assert "second" in now_ids
+    assert "sec" not in now_ids
     assert len(now_ids) <= 6
+
+
+def test_now_does_not_fill_with_notable_events():
+    overview = build_market_overview(
+        [
+            _event("model", "Lab introduces a reasoning model", 80, TODAY, kind="model_release", org="OpenAI", source_name="OpenAI Blog", tiers=["primary"]),
+            _event("chip", "Vendor unveils a local inference processor", 70, YESTERDAY, kind="hardware_platform", source_name="Vendor News", tiers=["secondary"]),
+            _event("notable", "Publisher launches a small agent runtime", 50, TODAY, kind="model_release", source_name="Magazine", tiers=["secondary"]),
+            _event("paper", "Researchers develop a language model for old manuscripts", 50, YESTERDAY, kind="research", source_name="Magazine", tiers=["secondary"]),
+        ],
+        now=NOW,
+    )
+    now_ids = [item["id"] for item in overview["happening_now"]]
+    assert now_ids == ["model", "chip"] or set(now_ids) == {"model", "chip"}
+    assert "notable" not in now_ids
+    assert "paper" not in now_ids
+
+
+def test_a_specific_kind_is_the_primary_subject():
+    event = _event(
+        "a",
+        "Launch of a framework for interactive agents from academic papers",
+        70,
+        TODAY,
+        kind="open_source_release",
+    )
+    assert market_category(event) == "Open Source"
+
+
+def test_a_product_name_is_not_an_agent_category():
+    event = _event(
+        "a",
+        "Integration of a data service with Northwind Agentforce for evidence",
+        70,
+        TODAY,
+        kind="capability",
+    )
+    assert market_category(event) != "Agents"
+
+
+def test_paraphrases_of_one_investigation_count_once():
+    events = [
+        _event("a", "Investigation reveals deaths near us.mexico surveillance towers", 75, MONDAY, kind="research", source_name="Review Desk"),
+        _event("b", "Investigation reveals failures in us.mexico surveillance technology", 70, MONDAY, kind="research", source_name="Field Journal"),
+        _event("c", "New surveillance towers fail to prevent migrant deaths", 79, MONDAY, kind="research", source_name="City Desk"),
+        _event("d", "Surveillance technology fails to prevent migrant deaths at the u.s.mexico surveillance line", 70, MONDAY, kind="research", source_name="Metro Desk"),
+    ]
+    assert len(set(_cluster_map(events).values())) == 1
+    overview = build_market_overview(events, now=NOW)
+    research = next(item for item in overview["pulse"] if item["label"] == "Research")
+    assert research["week"] == 1
+
+
+def test_a_security_incident_stays_separate_from_a_product_launch():
+    events = [
+        _event("launch", "Harbor introduces Muse assistant for writers", 70, MONDAY, kind="model_release", source_name="Harbor Blog", tiers=["primary"]),
+        _event("incident", "Harbor assistant Muse faces a security vulnerability", 70, TODAY, kind="security_incident", source_name="Security Desk", tiers=["secondary"]),
+    ]
+    assert _cluster_map(events)["launch"] != _cluster_map(events)["incident"]
+
+
+def test_a_shared_conference_name_is_not_one_development():
+    events = [
+        _event("sessions", "Summit 2026 features safety sessions", 50, TODAY, kind="other", source_name="Desk One"),
+        _event("demo", "Robot demo scheduled at Summit 2026", 50, TODAY, kind="other", source_name="Desk Two"),
+    ]
+    assert _cluster_map(events)["sessions"] != _cluster_map(events)["demo"]
 
 
 def test_concentrated_recent_activity_ranks_ahead_of_a_larger_older_set():

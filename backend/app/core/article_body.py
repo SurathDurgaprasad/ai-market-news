@@ -101,6 +101,7 @@ def enrich_article(
     content: str,
     image_url: Optional[str] = None,
     fetch_fn: Optional[Callable] = None,
+    fetch_publisher: bool = False,
 ) -> Tuple[str, Optional[str], Optional[str]]:
     """
     Return (content, image_url, publisher_name).
@@ -115,8 +116,13 @@ def enrich_article(
     fallback = compose_feed_text(title, body)
     image = sanitize_http_url(image_url, keep_query=True) if image_url else ""
 
-    if len(body) >= MIN_CONTENT_CHARS:
+    if len(body) >= MIN_CONTENT_CHARS and not fetch_publisher:
         return fallback, image or None, None
+
+    if len(body) >= MIN_CONTENT_CHARS and fetch_publisher:
+        publisher = extract_publisher_name(body) or None
+        if publisher or not fetch_fn or not url:
+            return fallback, image or None, publisher
 
     if not fetch_fn or not url:
         return fallback, image or None, None
@@ -131,7 +137,9 @@ def enrich_article(
             raw = str(raw).encode("utf-8", errors="replace")
         html = bytes(raw[:MAX_HTML_BYTES]).decode("utf-8", errors="replace")
         extracted = sanitize_html(_prefer_main_html(html))
-        if len(extracted) >= MIN_CONTENT_CHARS:
+        if len(body) >= MIN_CONTENT_CHARS:
+            composed = fallback
+        elif len(extracted) >= MIN_CONTENT_CHARS:
             composed = extracted[:MAX_CONTENT_CHARS]
         else:
             composed = compose_feed_text(title, extracted)

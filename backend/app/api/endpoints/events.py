@@ -11,7 +11,7 @@ from app.models.article import Article
 from app.models.source import Source
 from app.core.urls import sanitize_http_url
 from app.core.presentation import classify_image_role, present_citations
-from app.core.origin import resolve_originating_source
+from app.core.origin import evidence_tier_for_origin, host_of, resolve_originating_source
 from app.core.feed import current_week_start, is_feed_in_scope
 from app.core.market import MarketEvent, build_market_overview, event_matches_player
 
@@ -212,7 +212,7 @@ def _build_linked_articles(db: Session, event_id) -> List[LinkedArticleResponse]
     return result
 
 
-def _to_market_event(event: Event, sources: list) -> MarketEvent:
+def _to_market_event(event: Event, sources: list, primary_hosts: Optional[set] = None) -> MarketEvent:
     reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
     organization = ""
     primary_name = ""
@@ -229,6 +229,15 @@ def _to_market_event(event: Event, sources: list) -> MarketEvent:
     if primary_name and primary_name not in names:
         names.append(primary_name)
         tiers.append(event.primary_source.tier or "")
+    origin = resolve_originating_source(
+        ingest_name=primary_name or None,
+        ingest_url=event.primary_source.url if event.primary_source else None,
+        article_url=event.article_url,
+        publisher_name=event.official_source_name,
+    )
+    extra_tier = evidence_tier_for_origin(origin, primary_hosts or set())
+    if extra_tier and extra_tier not in tiers:
+        tiers.append(extra_tier)
     occurred = event.event_time or event.created_at
     return MarketEvent(
         id=str(event.id),
@@ -415,8 +424,13 @@ def get_market_overview(db: Session = Depends(get_db)):
         )
     ]
     links = _linked_sources_by_event(db, [event.id for event in rows])
+    primary_hosts = {
+        host_of(source.url)
+        for source in db.query(Source).filter(Source.tier == "primary").all()
+        if source.url
+    }
     overview = build_market_overview([
-        _to_market_event(event, links.get(event.id, []))
+        _to_market_event(event, links.get(event.id, []), primary_hosts)
         for event in rows
     ])
     return overview

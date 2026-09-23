@@ -22,6 +22,34 @@ def test_extract_og_image_accepts_https():
     assert extract_og_image(html) == "https://cdn.example.com/pic.jpg?w=800"
 
 
+def test_aggregator_fetch_reads_publisher_without_replacing_a_long_body():
+    html = """
+    <title>Introducing a model \\ Example Lab</title>
+    <meta name="twitter:site" content="@ExampleLabAI">
+    <html><body><article><p>Short page text.</p></article></body></html>
+    """
+    resp = MagicMock()
+    resp.content = html.encode("utf-8")
+    called = []
+
+    def fetch(url, timeout=8):
+        called.append(url)
+        return resp
+
+    body = "This feed blurb is already longer than fifty characters and should stay."
+    content, _, publisher = enrich_article(
+        "Title",
+        "https://www.examplelab.com/model",
+        body,
+        None,
+        fetch_fn=fetch,
+        fetch_publisher=True,
+    )
+    assert called == ["https://www.examplelab.com/model"]
+    assert "feed blurb" in content
+    assert publisher == "Example Lab"
+
+
 def test_enrich_does_not_fetch_when_body_is_long():
     called = []
 

@@ -84,8 +84,19 @@ class IntelligencePipeline:
             from app.core.fetcher import fetch_url
             fetch_fn = fetch_url
 
+        from app.core.origin import is_aggregator_source
+        from app.models.source import Source as IngestSource
+        ingest_row = self.db.query(IngestSource).filter(IngestSource.id == source_id).first()
+        fetch_publisher = bool(
+            ingest_row and is_aggregator_source(ingest_row.name, ingest_row.url)
+        )
         content, image_url, publisher_name = enrich_article(
-            title, url, content, article_data.image_url, fetch_fn=fetch_fn
+            title,
+            url,
+            content,
+            article_data.image_url,
+            fetch_fn=fetch_fn,
+            fetch_publisher=fetch_publisher,
         )
 
         # 2. Validate minimum content length

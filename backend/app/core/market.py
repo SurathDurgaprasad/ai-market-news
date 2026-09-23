@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from app.core.deduplication import STOP_WORDS
+from app.core.deduplication import classify_headline_relationship
+from app.core.providers.llm import EventRelationship
 
 NOW_WINDOW = timedelta(hours=36)
 DAY_WINDOW = timedelta(hours=24)
@@ -36,7 +37,7 @@ _CATEGORY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 _HEADLINE_SECURITY = re.compile(r"\b(malware|ransomware|vulnerability|cyberattack)\b", re.I)
 _HEADLINE_MODEL = re.compile(r"\b(large language model|foundation model|llm|gpt-\d)\b", re.I)
 _HEADLINE_RESEARCH = re.compile(r"\bresearch\b", re.I)
-_HEADLINE_ASSISTANT = re.compile(r"\b(ai assistant|ai bots?|chatbots?|agentforce)\b", re.I)
+_HEADLINE_ASSISTANT = re.compile(r"\b(ai assistant|ai bots?|chatbots?)\b", re.I)
 _SUBSTANCE = {
     "model_release": 3,
     "model_family": 3,
@@ -141,24 +142,25 @@ def _alias_in(text: str, alias: str) -> bool:
 
 def market_category(event: MarketEvent) -> Optional[str]:
     """
-    One primary category. Keyword evidence wins over a generic kind.
-    A headline can fill a missing kind. Customer deployments and policy
-    notes stay uncategorized when the headline does not name a category.
+    One category from the event's primary subject.
+
+    A stored specific kind (model release, research, open source, hardware)
+    is that subject. A headline word such as "agent" does not recategorize it.
+    Headline rules apply when the kind is generic, and a summary mention never does.
+    Security language in the headline still wins, because those words name the incident.
     """
     kind = (event.event_kind or "other").strip().lower()
     headline = event.headline or ""
     if kind == "security_incident" or _HEADLINE_SECURITY.search(headline):
         return "Security"
-    # Headline only. A summary mention of a generic word such as "agent"
-    # must not pull a model release into another category.
+    mapped = _KIND_CATEGORY.get(kind)
+    if mapped:
+        return mapped
     for label, pattern in _CATEGORY_RULES:
         if pattern.search(headline):
             return label
     if _HEADLINE_CODING.search(headline):
         return "Coding"
-    mapped = _KIND_CATEGORY.get(kind)
-    if mapped:
-        return mapped
     if _HEADLINE_MODEL.search(headline):
         return "Models"
     if _HEADLINE_ENDPOINT.search(headline):
@@ -192,15 +194,6 @@ _HIGH_KINDS = {
     "acquisition",
 }
 
-_CONTENT_TOKEN = re.compile(r"[a-z0-9][a-z0-9.+-]{2,}")
-_GENERIC_TOKENS = STOP_WORDS | {
-    "model", "models", "system", "systems", "platform", "technology",
-    "research", "software", "service", "services", "data", "cloud",
-    "global", "company", "companies", "development", "developments",
-    "intelligence", "artificial", "machine", "learning", "using",
-    "their", "this", "that", "with", "from", "into", "over", "about",
-    "have", "been", "will", "after", "before", "near", "more", "most",
-}
 _DISTRIBUTION = re.compile(r"\b(available on|now available|released on)\b", re.I)
 
 
@@ -403,31 +396,18 @@ def _quality_key(event: MarketEvent, moment: datetime) -> tuple:
     )
 
 
-def _content_tokens(headline: str) -> set[str]:
-    return {
-        token
-        for token in _CONTENT_TOKEN.findall((headline or "").lower())
-        if token not in _GENERIC_TOKENS
-    }
-
-
 def _same_reader_development(left: MarketEvent, right: MarketEvent) -> bool:
-    """
-    True when two headlines are coverage of one reader-level development.
-
-    Requires several shared content words, not a single generic term.
-    """
-    left_tokens = _content_tokens(left.headline)
-    right_tokens = _content_tokens(right.headline)
-    if len(left_tokens) < 3 or len(right_tokens) < 3:
-        return False
-    shared = left_tokens & right_tokens
-    if len(shared) < 3:
-        return False
-    union = len(left_tokens | right_tokens)
-    jaccard = len(shared) / union if union else 0
-    overlap = len(shared) / min(len(left_tokens), len(right_tokens))
-    return jaccard >= 0.4 or overlap >= 0.5
+    """One underlying development, including a later distribution of a release."""
+    relationship = classify_headline_relationship(
+        left.headline,
+        right.headline,
+        left.event_kind,
+        right.event_kind,
+    )
+    return relationship in {
+        EventRelationship.SAME_EVENT,
+        EventRelationship.UPDATE_TO_SAME_EVENT,
+    }
 
 
 def _cluster_map(events: list[MarketEvent]) -> dict[str, str]:
@@ -498,12 +478,20 @@ def _select_diverse(
 
 def _select_now(events: list[MarketEvent], moment: datetime) -> list[MarketEvent]:
     """
-    One organization and one category first, so comparable items spread out.
-    A second item in a category is allowed only when it is itself a major
-    substantive development and comes from a different organization.
+    Up to six significant developments. A short list is left short.
+
+    One organization and one category first. A second item in a category
+    is allowed only when it is itself a major substantive development
+    from a different organization. Notable items are not used to fill
+    the section out to six.
     """
     ranked = sorted(events, key=lambda event: _quality_key(event, moment), reverse=True)
-    strong = [event for event in ranked if _substance(event) >= 3 or event.importance >= 80]
+    qualified = [event for event in ranked if event.importance >= 70]
+    # Major releases are placed before other high-substance items, so a
+    # second model introduction is not pushed out by an earlier item from
+    # the same organization.
+    majors = [event for event in qualified if event.importance >= 80]
+    core = [event for event in qualified if event.importance < 80 and _substance(event) >= 3]
     chosen: list[MarketEvent] = []
     orgs: dict[str, int] = {}
     categories: dict[str, int] = {}
@@ -517,17 +505,21 @@ def _select_now(events: list[MarketEvent], moment: datetime) -> list[MarketEvent
             categories[category] = categories.get(category, 0) + 1
         chosen.append(event)
 
-    for event in strong:
-        org = _display_organization(event) or event.id
-        category = market_category(event) or ""
-        if orgs.get(org, 0) >= 1:
-            continue
-        if category and categories.get(category, 0) >= 1:
-            deferred.append(event)
-            continue
-        take(event)
-        if len(chosen) >= 6:
-            break
+    def place(group: list[MarketEvent], *, defer: bool) -> None:
+        for event in group:
+            if len(chosen) >= 6:
+                break
+            org = _display_organization(event) or event.id
+            category = market_category(event) or ""
+            if orgs.get(org, 0) >= 1:
+                continue
+            if category and categories.get(category, 0) >= 1:
+                if defer:
+                    deferred.append(event)
+                continue
+            take(event)
+
+    place(majors, defer=True)
     for event in deferred:
         if len(chosen) >= 6:
             break
@@ -540,15 +532,19 @@ def _select_now(events: list[MarketEvent], moment: datetime) -> list[MarketEvent
         if category and categories.get(category, 0) >= 2:
             continue
         take(event)
-    if len(chosen) < 4:
-        extra = _select_diverse(ranked, moment, 6, 2, 2)
-        seen = {event.id for event in chosen}
-        for event in extra:
-            if event.id in seen:
-                continue
-            chosen.append(event)
-            if len(chosen) >= 4:
-                break
+    seen = {event.id for event in chosen}
+    for event in qualified:
+        if len(chosen) >= 6:
+            break
+        if event.id in seen:
+            continue
+        org = _display_organization(event) or event.id
+        category = market_category(event) or ""
+        if orgs.get(org, 0) >= 1:
+            continue
+        if category and categories.get(category, 0) >= 1:
+            continue
+        take(event)
     chosen.sort(key=lambda event: _quality_key(event, moment), reverse=True)
     return chosen[:6]
 
@@ -617,9 +613,9 @@ def build_market_overview(events: list[MarketEvent], now: Optional[datetime] = N
         if not is_discussion(event)
         and not is_roundup(event)
         and not _is_customer_deployment(event)
-        and event.importance >= 50
+        and event.importance >= 70
     ]
-    now_pool = _representatives(direct if direct else window, moment)
+    now_pool = _representatives(direct, moment)
     happening = _select_now(now_pool, moment)
     happening_ids = {event.id for event in happening}
     happening_clusters = {clusters[event.id] for event in happening}
