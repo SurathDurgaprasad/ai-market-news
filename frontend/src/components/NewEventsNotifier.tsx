@@ -46,7 +46,7 @@ export const NewEventsNotifier: React.FC<{ latestEventTimestamp: string }> = ({
       <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
         {newCount} new development{newCount > 1 ? 's' : ''}
       </span>
-      <span className="mt-0.5 text-[11px] text-secondary">Refresh feed</span>
+      <span className="mt-0.5 text-[11px] text-secondary">Refresh</span>
     </button>
   );
 };

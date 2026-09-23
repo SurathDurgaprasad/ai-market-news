@@ -1,7 +1,19 @@
 import { EventCard, type EventCardData } from '@/components/EventCard';
+import { MarketOverview, type MarketOverviewData } from '@/components/MarketOverview';
 import { NewEventsNotifier } from '@/components/NewEventsNotifier';
 import { API_V1 } from '@/lib/api';
 import { formatUtcInstrument, groupFeedByRecency, latestCreatedAt } from '@/lib/time';
+
+async function getOverview(): Promise<MarketOverviewData | null> {
+  try {
+    const res = await fetch(`${API_V1}/events/overview`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`API returned status ${res.status}`);
+    return await res.json();
+  } catch (error) {
+    console.error('Failed to fetch market overview:', error);
+    return null;
+  }
+}
 
 async function getEvents() {
   try {
@@ -21,7 +33,10 @@ async function getEvents() {
 }
 
 export default async function Home() {
-  const events: EventCardData[] | null = await getEvents();
+  const [overview, events] = await Promise.all([
+    getOverview(),
+    getEvents() as Promise<EventCardData[] | null>,
+  ]);
   const latestCreated = events && events.length > 0 ? latestCreatedAt(events) : '';
   const newestStamp =
     events && events.length > 0
@@ -47,7 +62,7 @@ export default async function Home() {
             AI World Intelligence
           </h1>
           <p className="mt-3 max-w-xl text-sm leading-relaxed text-secondary">
-            Live source-grounded intelligence
+            What is changing in AI right now
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-x-8 gap-y-3 border-t border-line pt-5">
             <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-success">
@@ -64,8 +79,11 @@ export default async function Home() {
                 Updated {newestStamp}
               </span>
             ) : null}
+            {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
           </div>
         </header>
+
+        {overview ? <MarketOverview data={overview} /> : null}
 
         <div id="latest-developments" className="mb-7 flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -76,7 +94,6 @@ export default async function Home() {
               This week · newest first · times in UTC
             </p>
           </div>
-          {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
         </div>
 
         {!events ? (

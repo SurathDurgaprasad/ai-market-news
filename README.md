@@ -1,6 +1,6 @@
 # AI World Intelligence Platform
 
-A current-week AI intelligence feed. Newest developments are first. Repeated reports of the same release collapse into one event. Official and research links come from the articles the pipeline actually fetched.
+The homepage is a current-week market overview: what is happening now, what is trending, the largest developments, category activity, and major AI organizations. The chronological week feed stays underneath. Newest developments are first. Repeated reports of the same release collapse into one event. Official and research links come from the articles the pipeline actually fetched.
 
 Stack: FastAPI, SQLite, APScheduler, Next.js. There is no Postgres, Redis, or Celery in the running system.
 

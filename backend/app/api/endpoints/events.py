@@ -13,6 +13,7 @@ from app.core.urls import sanitize_http_url
 from app.core.presentation import classify_image_role, present_citations
 from app.core.origin import resolve_originating_source
 from app.core.feed import current_week_start, is_feed_in_scope
+from app.core.market import MarketEvent, build_market_overview, event_matches_player
 
 router = APIRouter()
 
@@ -211,6 +212,57 @@ def _build_linked_articles(db: Session, event_id) -> List[LinkedArticleResponse]
     return result
 
 
+def _to_market_event(event: Event, sources: list) -> MarketEvent:
+    reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+    organization = ""
+    primary_name = ""
+    if event.primary_source is not None:
+        primary_name = event.primary_source.name or ""
+        if event.primary_source.organization is not None:
+            organization = event.primary_source.organization.name or ""
+    names: list[str] = []
+    tiers: list[str] = []
+    for source in sources:
+        if source.name and source.name not in names:
+            names.append(source.name)
+            tiers.append(source.tier or "")
+    if primary_name and primary_name not in names:
+        names.append(primary_name)
+        tiers.append(event.primary_source.tier or "")
+    occurred = event.event_time or event.created_at
+    return MarketEvent(
+        id=str(event.id),
+        headline=event.headline or "",
+        summary=event.short_summary or "",
+        importance=event.importance_score or 0,
+        occurred_at=occurred,
+        entities=[item for item in (event.entities or []) if isinstance(item, str)],
+        event_kind=str(reasoning.get("event_kind") or "other"),
+        source_names=names,
+        source_tiers=tiers,
+        organization_name=organization,
+        primary_source_name=primary_name,
+    )
+
+
+def _linked_sources_by_event(db: Session, event_ids: list) -> dict:
+    if not event_ids:
+        return {}
+    rows = (
+        db.query(EventArticle.event_id, Source)
+        .join(Article, EventArticle.article_id == Article.id)
+        .join(Source, Article.source_id == Source.id)
+        .filter(EventArticle.event_id.in_(event_ids))
+        .all()
+    )
+    grouped: dict = {}
+    for event_id, source in rows:
+        bucket = grouped.setdefault(event_id, [])
+        if all(existing.id != source.id for existing in bucket):
+            bucket.append(source)
+    return grouped
+
+
 def _in_current_week(query, now: Optional[datetime] = None):
     """Keep events whose real-world time falls in the current ISO week (UTC)."""
     start = current_week_start(now)
@@ -230,6 +282,7 @@ def get_events(
         None,
         description="week = current ISO week, newest first, AI developments only",
     ),
+    player: Optional[str] = Query(None, description="Slug of a major AI organization"),
 ):
     """
     Retrieve paginated high-signal events.
@@ -272,6 +325,11 @@ def get_events(
                 event.short_summary,
                 event.primary_source.tier if event.primary_source else None,
             )
+        ]
+    if player:
+        events = [
+            event for event in events
+            if event_matches_player(_to_market_event(event, []), player)
         ]
 
     # Linked articles are omitted from the list view for performance.
@@ -332,6 +390,36 @@ def get_new_events_count(
         )
         return {"new_events_count": count}
     return {"new_events_count": query.count()}
+
+
+@router.get("/overview")
+def get_market_overview(db: Session = Depends(get_db)):
+    """
+    Current-week market overview built from canonical events.
+    Counts are events. Article copies are not counted again.
+    """
+    query = (
+        db.query(Event)
+        .options(joinedload(Event.primary_source).joinedload(Source.organization))
+        .filter(Event.superseded_by_id.is_(None))
+    )
+    query = _high_signal(query)
+    query = _in_current_week(query)
+    rows = _order_by_real_world_time(query).limit(250).all()
+    rows = [
+        event for event in rows
+        if is_feed_in_scope(
+            event.headline,
+            event.short_summary,
+            event.primary_source.tier if event.primary_source else None,
+        )
+    ]
+    links = _linked_sources_by_event(db, [event.id for event in rows])
+    overview = build_market_overview([
+        _to_market_event(event, links.get(event.id, []))
+        for event in rows
+    ])
+    return overview
 
 
 @router.get("/{event_id}", response_model=EventResponse)
