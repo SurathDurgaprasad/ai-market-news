@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.deduplication import (
+    coverage_of_same_named_release,
+    named_product_keys,
     titles_are_safe_lexical_match,
     titles_are_same_outlet_paraphrase,
     titles_are_same_release_wording,
@@ -25,6 +27,8 @@ def _should_merge(left: Event, right: Event) -> bool:
     b = right.headline or ""
     if titles_are_safe_lexical_match(a, b) or titles_are_same_release_wording(a, b):
         return True
+    if coverage_of_same_named_release(a, left.article_url, b, right.article_url):
+        return True
     same_source = (
         left.primary_source_id is not None
         and left.primary_source_id == right.primary_source_id
@@ -33,11 +37,19 @@ def _should_merge(left: Event, right: Event) -> bool:
 
 
 def _prefer(event: Event):
+    """
+    Keep the card that names the product, then the higher source tier.
+
+    A community post whose headline names the model beats a generic
+    secondary headline about the same release, because the named card is
+    the one readers should open. Two named cards still prefer primary.
+    """
+    named = 0 if named_product_keys(event.headline) else 1
     tier = ""
     if event.primary_source is not None and event.primary_source.tier:
         tier = event.primary_source.tier.lower()
     when = event.event_time or event.created_at or datetime.max.replace(tzinfo=timezone.utc)
-    return (_TIER_RANK.get(tier, 2), -(event.importance_score or 0), when)
+    return (named, _TIER_RANK.get(tier, 2), -(event.importance_score or 0), when)
 
 
 def _move_articles(db: Session, duplicate: Event, canonical: Event) -> None:

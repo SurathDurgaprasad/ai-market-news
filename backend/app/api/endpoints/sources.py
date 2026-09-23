@@ -27,7 +27,7 @@ class SourceResponse(BaseModel):
 def get_sources(
     db: Session = Depends(get_db),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100)
+    limit: int = Query(250, ge=1, le=1000)
 ):
     sources = db.query(Source).offset(skip).limit(limit).all()
     

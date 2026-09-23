@@ -1,6 +1,7 @@
 import hashlib
 import re
 from typing import Optional
+from urllib.parse import urlparse
 from app.core.urls import sanitize_http_url
 from app.core.presentation import strip_wrapping_quotes
 
@@ -336,6 +337,109 @@ def titles_are_same_outlet_paraphrase(title1: str, title2: str) -> bool:
     if only_left and only_right:
         return False
     return len(only_left or only_right) <= 2
+
+
+# A later distribution, benchmark, price change, or deployment of a named
+# product is a different event from the announcement itself.
+_DISTINCT_COVERAGE = re.compile(
+    r"\b("
+    r"available on|now available|released on|comes to|lands on|"
+    r"benchmarks?|raises|funding|acquires|acquisition|"
+    r"implements|deploys|integrates|enhances|built with|\buses\b|"
+    r"pric(?:e|ing)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_ANNOUNCEMENT = re.compile(
+    r"\b("
+    r"introduction of|release of|launch of|announcement of|"
+    r"announces|launches|releases|unveils|introduces"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_TITLE_NAMED_PRODUCT = re.compile(
+    r"\b("
+    r"claude(?:\s+[a-z]+){0,3}\s+\d+\.\d+(?:\.\d+)?|"
+    r"gpt-\d+(?:\.\d+)?\s+(?:sol|luna|turbo|mini|pro|nano)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_URL_NAMED_PRODUCT = re.compile(
+    r"(?:"
+    r"claude(?:-[a-z]+){0,3}-\d+-\d+|"
+    r"opus-\d+-\d+|"
+    r"gpt-\d+(?:-\d+)?-(?:sol|luna|turbo|mini|pro|nano)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _normalize_product_key(raw: str) -> str:
+    text = raw.lower().replace("-", " ")
+    text = re.sub(r"[^a-z0-9.\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\b(\d+)\s+(\d+)\b", r"\1.\2", text)
+
+
+def named_product_keys(title: Optional[str] = None, url: Optional[str] = None) -> set[str]:
+    """Versioned or code-named products actually written in a title or stored URL."""
+    keys: set[str] = set()
+    if title:
+        for match in _TITLE_NAMED_PRODUCT.findall(title):
+            key = _normalize_product_key(match)
+            if key:
+                keys.add(key)
+    if url:
+        path = urlparse(url).path if "://" in url else url
+        for match in _URL_NAMED_PRODUCT.findall(path):
+            key = _normalize_product_key(match)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _product_keys_overlap(left: set[str], right: set[str]) -> bool:
+    for a in left:
+        for b in right:
+            if a == b or a.endswith(" " + b) or b.endswith(" " + a):
+                return True
+    return False
+
+
+def coverage_of_same_named_release(
+    title1: str,
+    url1: Optional[str],
+    title2: str,
+    url2: Optional[str],
+) -> bool:
+    """
+    True when one stored article is coverage of the same named release as the other.
+
+    The product name has to appear in a headline or in a URL the pipeline
+    already stored. Availability notes, benchmarks, pricing, and deployments
+    of that product stay separate.
+    """
+    if titles_suggest_different_events(title1, title2):
+        return False
+    if titles_have_contrasting_claims(title1, title2):
+        return False
+    if _DISTINCT_COVERAGE.search(title1 or "") or _DISTINCT_COVERAGE.search(title2 or ""):
+        return False
+    titled = (named_product_keys(title1), named_product_keys(title2))
+    # Both headlines already name a product. A later use, service tier, or
+    # deployment of that product must not collapse into the launch card.
+    # This path is only for a generic coverage headline whose stored URL
+    # carries the product name.
+    if titled[0] and titled[1]:
+        return False
+    if not titled[0] and not titled[1]:
+        return False
+    if not (_ANNOUNCEMENT.search(title1 or "") and _ANNOUNCEMENT.search(title2 or "")):
+        return False
+    return _product_keys_overlap(named_product_keys(title1, url1), named_product_keys(title2, url2))
 
 
 _VERSIONED_NAME = re.compile(

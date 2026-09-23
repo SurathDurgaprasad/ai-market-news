@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from seed_sources import SOURCES
+from app.core.registry import load_registry
 from app.core.fetcher import fetch_url
 from app.core.parser import parse_rss_feed, extract_feed_next_url
 
@@ -50,7 +50,9 @@ def classify_response(url: str) -> dict:
 def main() -> None:
     print("Source registry probe (does not modify the database)\n")
     counts: dict[str, int] = {}
-    for _org, name, url, _tier, _poll in SOURCES:
+    for record in load_registry():
+        name = record["name"]
+        url = record["url"]
         result = classify_response(url)
         counts[result["status"]] = counts.get(result["status"], 0) + 1
         extra = f" next={result['next']}" if result.get("next") else ""

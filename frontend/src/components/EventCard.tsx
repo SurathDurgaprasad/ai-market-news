@@ -69,7 +69,7 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
 
   return (
     <article
-      className={`intel-card group relative flex h-full flex-col overflow-hidden rounded-lg border bg-[#111114] ${tier.card} ${tier.accent}`}
+      className={`intel-card group relative flex h-full flex-col overflow-hidden rounded-lg border ${tier.card} ${tier.accent}`}
     >
       <Link
         href={href}
@@ -77,7 +77,7 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
         className="flex min-h-0 flex-1 flex-col rounded-[inherit] focus-visible:outline-offset-[-2px]"
       >
         {safeImageUrl ? (
-          <div className={`relative w-full overflow-hidden border-b border-white/[0.06] ${imageClass}`}>
+          <div className={`relative w-full overflow-hidden border-b border-line ${imageClass}`}>
             <img
               src={safeImageUrl}
               alt=""
@@ -87,8 +87,8 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
             />
           </div>
         ) : displaySource && !isMinor ? (
-          <div className="flex min-h-[4.75rem] items-center justify-center border-b border-white/[0.06] bg-[#0c0c0e] px-5">
-            <p className="text-center text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+          <div className="flex min-h-[4.75rem] items-center justify-center border-b border-line bg-elevated px-5">
+            <p className="text-center text-[11px] font-semibold uppercase tracking-[0.2em] text-muted">
               {displaySource.name}
             </p>
           </div>
@@ -100,7 +100,7 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
               {tier.label}
             </span>
             <time
-              className="shrink-0 text-[11px] font-medium tracking-wide text-zinc-400"
+              className="shrink-0 text-[11px] font-medium tracking-wide text-muted"
               dateTime={event.event_time ?? event.created_at}
             >
               {displayTime}
@@ -108,40 +108,40 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
           </div>
 
           <h3
-            className={`mb-2 line-clamp-3 font-medium tracking-tight text-zinc-50 group-hover:text-white ${tier.title}`}
+            className={`mb-2 line-clamp-3 font-medium tracking-tight text-ink group-hover:text-ink ${tier.title}`}
           >
             {event.headline}
           </h3>
 
           {summary ? (
             <p
-              className={`leading-relaxed text-zinc-400 ${
+              className={`leading-relaxed text-muted ${
                 isMinor ? 'line-clamp-2 text-[13px]' : 'line-clamp-2 text-[14px]'
               }`}
             >
               {summary}
             </p>
           ) : (
-            <p className="text-[12px] font-medium uppercase tracking-[0.14em] text-amber-400/80">
+            <p className="text-[12px] font-medium uppercase tracking-[0.14em] text-warning">
               Processing
             </p>
           )}
 
           {entities.shown.length > 0 ? (
-            <p className="mt-3 line-clamp-1 text-[12px] leading-relaxed text-zinc-400">
+            <p className="mt-3 line-clamp-1 text-[12px] leading-relaxed text-muted">
               {entities.shown.join(' · ')}
               {entities.remainder > 0 ? ` +${entities.remainder}` : ''}
             </p>
           ) : null}
 
-          <p className="mt-auto pt-4 text-[12px] text-zinc-400 transition-colors group-hover:text-zinc-200">
+          <p className="mt-auto pt-4 text-[12px] text-muted transition-colors group-hover:text-secondary">
             View event →
           </p>
         </div>
       </Link>
 
       <div className="flex items-center justify-between gap-3 px-5 pb-4">
-        <p className="min-w-0 truncate text-[13px] text-zinc-400">
+        <p className="min-w-0 truncate text-[13px] text-muted">
           {displaySource?.name ?? 'Source unavailable'}
         </p>
         {officialHref ? (
@@ -150,7 +150,7 @@ export const EventCard: React.FC<{ event: EventCardData }> = ({ event }) => {
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`${sourceLabel}: ${displaySource?.name ?? 'source'}`}
-            className="shrink-0 text-[13px] text-zinc-300 transition-colors hover:text-sky-300 focus-visible:text-sky-300"
+            className="shrink-0 text-[13px] text-secondary transition-colors hover:text-accent focus-visible:text-accent"
           >
             {sourceLabel}
           </a>

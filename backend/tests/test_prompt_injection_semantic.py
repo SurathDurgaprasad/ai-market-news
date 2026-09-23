@@ -15,6 +15,10 @@ from app.core.ai_processor import EventClassification, SourceGroundedSummary
 # reintroduced hang; it was actually a sizing bug in this test file.
 LIVE_NVIDIA_TIMEOUT = int(3 * NVIDIA_REQUEST_DEADLINE_SECONDS + 60)
 
+# Isolated from `pytest -m "not live_nvidia"`. skipif alone still ran these
+# whenever NVIDIA_API_KEY was present, and each call waits on the live API.
+pytestmark = pytest.mark.live_nvidia
+
 
 @pytest.mark.skipif(not os.environ.get("NVIDIA_API_KEY"), reason="Requires NVIDIA_API_KEY")
 @pytest.mark.timeout(LIVE_NVIDIA_TIMEOUT)

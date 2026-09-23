@@ -1,3 +1,5 @@
+> Historical product-discovery notes. The running system is FastAPI + SQLite + APScheduler + Next.js, described in `README.md` and `docs/ARCHITECTURE.md`. Recommendations below that mention PostgreSQL, pgvector, Redis, or BullMQ were not built.
+
 # AI World Intelligence Platform — End-to-End Product Discovery
 
 **Research Report | September 2026**

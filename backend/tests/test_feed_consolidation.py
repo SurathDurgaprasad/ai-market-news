@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.consolidate import consolidate_safe_duplicates
 from app.core.deduplication import (
+    coverage_of_same_named_release,
     titles_are_safe_lexical_match,
     titles_are_same_outlet_paraphrase,
     titles_are_same_release_wording,
@@ -58,6 +59,59 @@ def test_release_wording_matches_named_model_not_availability_or_other_product()
         "Higgsfield AI Launches GPT-6 Astra for Video Ad Creation",
     )
     assert title_versioned_entities("Release of Claude Opus 5.5") == ["Claude Opus 5.5"]
+
+
+def test_generic_coverage_of_a_named_release_merges_and_availability_does_not():
+    assert coverage_of_same_named_release(
+        "Introduction of GPT-6 Sol and Luna Models",
+        "https://openai.com/index/introducing-gpt-6-sol-and-luna",
+        "OpenAI Launches Two New Models",
+        "https://techcrunch.com/2026/09/22/openai-launches-gpt-6-sol-and-luna",
+    )
+    assert coverage_of_same_named_release(
+        "Introduction of Claude Opus 5.5 Model",
+        "https://www.anthropic.com/claude-opus-5-5",
+        "Anthropic announces strongest-performing model",
+        "https://techcrunch.com/2026/09/22/anthropic-releases-opus-5-5-with-lower-prices",
+    )
+    assert not coverage_of_same_named_release(
+        "Introduction of GPT-6 Sol and Luna Models",
+        "https://openai.com/index/introducing-gpt-6-sol-and-luna",
+        "GPT-6 Sol and Luna Models Now Available on Amazon Bedrock",
+        "https://aws.amazon.com/blogs/machine-learning/gpt-6-sol-and-luna-on-amazon-bedrock",
+    )
+    assert not coverage_of_same_named_release(
+        "Introduction of Claude Opus 5.5 Model",
+        "https://www.anthropic.com/claude-opus-5-5",
+        "Acme implements Claude Opus 5.5 for support workflows",
+        "https://example.com/acme-implements-claude-opus-5-5",
+    )
+    assert not coverage_of_same_named_release(
+        "ChatGPT Launches GPT-5.6 Sol and Luna",
+        "https://openai.com/index/gpt-5-6-sol",
+        "OpenAI Launches Ultrafast API Service Tier for GPT-5.6 Sol",
+        "https://openai.com/index/gpt-5-6-sol-ultrafast",
+    )
+    assert not coverage_of_same_named_release(
+        "ChatGPT Launches GPT-5.6 Sol and Luna",
+        "https://openai.com/index/gpt-5-6-sol",
+        "MIT Researcher Utilizes GPT-5.6 Sol with Codex for Quantum Computing",
+        "https://openai.com/index/mit-gpt-5-6-sol",
+    )
+
+
+def test_rebar_firmware_is_out_of_the_week_feed_and_inference_hardware_stays():
+    assert not is_feed_in_scope(
+        "Release of ReBarUEFI Driver for Resizable BAR Support",
+        "The ReBarUEFI driver enables Resizable BAR on systems that do not officially support it, "
+        "providing functionality for Intel Arc GPUs.",
+        "community",
+    )
+    assert is_feed_in_scope(
+        "NVIDIA ships a new inference GPU",
+        "The chip is aimed at model inference clusters.",
+        "secondary",
+    )
 
 
 def test_feed_scope_keeps_ai_and_curated_sources():

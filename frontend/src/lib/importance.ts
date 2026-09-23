@@ -15,9 +15,9 @@ export function importanceMeta(score: number): {
     return {
       key: "major",
       label: "Major",
-      badge: "text-amber-400",
-      card: "border-amber-400/35 bg-[#14120e]",
-      accent: "before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:bg-amber-400",
+      badge: "text-warning",
+      card: "border-line",
+      accent: "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-warning",
       image: "aspect-[16/8] max-h-44",
       title: "text-[1.35rem] leading-snug md:text-[1.45rem]",
     };
@@ -26,9 +26,9 @@ export function importanceMeta(score: number): {
     return {
       key: "significant",
       label: "Significant",
-      badge: "text-sky-400",
-      card: "border-sky-400/30",
-      accent: "before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:bg-sky-400",
+      badge: "text-secondary",
+      card: "border-line",
+      accent: "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-accent",
       image: "aspect-[16/9] max-h-40",
       title: "text-[1.2rem] leading-snug",
     };
@@ -37,8 +37,8 @@ export function importanceMeta(score: number): {
     return {
       key: "notable",
       label: "Notable",
-      badge: "text-sky-300/90",
-      card: "border-white/[0.08]",
+      badge: "text-muted",
+      card: "border-line",
       accent: "",
       image: "aspect-[16/10] max-h-36",
       title: "text-[1.05rem] leading-snug",
@@ -47,11 +47,11 @@ export function importanceMeta(score: number): {
   return {
     key: "minor",
     label: "Minor",
-    badge: "text-zinc-500",
-    card: "border-white/[0.06] bg-[#0d0d0f]",
+    badge: "text-muted",
+    card: "border-line",
     accent: "",
     image: "",
-    title: "text-[0.98rem] leading-snug text-zinc-200",
+    title: "text-[0.98rem] leading-snug",
   };
 }
 

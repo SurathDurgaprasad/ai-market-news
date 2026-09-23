@@ -14,7 +14,7 @@ back to URL, and updating url in place on a match.
 """
 import uuid
 
-from seed_sources import seed
+from app.core.registry import seed_from_registry as seed
 from app.models.source import Source, Organization
 
 
@@ -59,3 +59,41 @@ def test_seed_is_idempotent_across_two_runs(db_session):
 
     names = [s.name for s in db_session.query(Source).all()]
     assert len(names) == len(set(names)), "seed() must never produce two sources with the same name"
+
+
+def test_url_correction_matches_a_row_that_has_no_organization(db_session):
+    original = Source(
+        id=uuid.uuid4(),
+        name="Google DeepMind Blog",
+        url="https://deepmind.google/blog/rss",
+        organization_id=None,
+        type="rss",
+        tier="primary",
+        polling_tier="high",
+        enabled=True,
+        health_status="failing",
+    )
+    db_session.add(original)
+    db_session.commit()
+    original_id = original.id
+
+    seed(db_session)
+
+    rows = db_session.query(Source).filter(Source.name == "Google DeepMind Blog").all()
+    assert len(rows) == 1
+    assert rows[0].id == original_id
+    assert rows[0].url == "https://deepmind.google/blog/rss.xml"
+    assert rows[0].organization is not None
+    assert rows[0].organization.name == "Google DeepMind"
+
+
+def test_seed_does_not_reenable_a_disabled_source(db_session):
+    seed(db_session)
+    row = db_session.query(Source).filter(Source.name == "OpenAI Blog").one()
+    row.enabled = False
+    db_session.commit()
+
+    seed(db_session)
+
+    db_session.refresh(row)
+    assert row.enabled is False

@@ -1,3 +1,5 @@
+> Historical architecture research. It is not the running system. The product uses SQLite, APScheduler, and FastAPI. See `README.md`.
+
 # **AI World Intelligence Platform: Product Requirements & Engineering Roadmap**
 
 ## **A. Executive Summary**

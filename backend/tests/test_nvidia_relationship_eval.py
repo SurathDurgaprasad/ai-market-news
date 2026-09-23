@@ -47,6 +47,7 @@ _NVIDIA_AVAILABLE = (
 )
 
 pytestmark = [
+    pytest.mark.live_nvidia,
     pytest.mark.skipif(
         not _NVIDIA_AVAILABLE,
         reason=(

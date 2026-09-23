@@ -22,11 +22,14 @@ _PROMO = re.compile(
 # Word-boundary signals that the item is an AI development. Primary and
 # research sources skip this check. "model" is included because hardware
 # and release headlines often say "model" without the letters "AI".
+# A bare "GPU" is not enough: community posts about ordinary graphics
+# firmware match it without being an AI development. NVIDIA and CUDA
+# still match on their own.
 _AI_SIGNAL = re.compile(
     r"\b("
     r"a\.?i\.?|artificial intelligence|machine learning|deep learning|"
     r"llms?|gpt(?:-\d+|\d+)?|claude|gemini|llama|mistral|deepseek|grok|"
-    r"openai|anthropic|deepmind|neural|transformers?|gpus?|inference|"
+    r"openai|anthropic|deepmind|neural|transformers?|inference|"
     r"robots?|robotics|agents?|benchmarks?|datasets?|multimodal|diffusion|"
     r"generative|foundation models?|open[- ]weights?|tokenizers?|"
     r"bedrock|cuda|nvidia|hugging\s?face|langchain|"

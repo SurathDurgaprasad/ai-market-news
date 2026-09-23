@@ -50,13 +50,13 @@ export default async function EventDetailPage({
 
   if (!event) {
     return (
-      <main className="min-h-screen bg-[#070708] p-16 text-white selection:bg-sky-500/30">
+      <main className="min-h-screen bg-canvas p-16 text-ink selection:bg-accent/30">
         <div className="intel-shell text-center">
-          <h1 className="mb-4 text-3xl font-semibold text-red-400">Event not found</h1>
-          <p className="mb-8 text-zinc-400">
+          <h1 className="mb-4 text-3xl font-semibold text-danger">Event not found</h1>
+          <p className="mb-8 text-muted">
             The event does not exist or the backend is unreachable.
           </p>
-          <Link href="/" className="text-sky-400 hover:underline">
+          <Link href="/" className="text-accent hover:underline">
             ← Back to Intelligence
           </Link>
         </div>
@@ -93,10 +93,10 @@ export default async function EventDetailPage({
   });
 
   return (
-    <main className="min-h-screen bg-[#070708] text-zinc-100 selection:bg-sky-500/30">
+    <main className="min-h-screen bg-canvas text-ink selection:bg-accent/30">
       <a
         href="#event-body"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-zinc-100 focus:px-3 focus:py-2 focus:text-sm focus:text-zinc-900"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-ink focus:px-3 focus:py-2 focus:text-sm focus:text-canvas"
       >
         Skip to event
       </a>
@@ -104,7 +104,7 @@ export default async function EventDetailPage({
         <nav className="mb-6">
           <Link
             href="/"
-            className="inline-flex items-center text-sm font-medium text-zinc-300 transition-colors hover:text-white"
+            className="inline-flex items-center text-sm font-medium text-secondary transition-colors hover:text-ink"
           >
             ← Back to Intelligence
           </Link>
@@ -112,7 +112,7 @@ export default async function EventDetailPage({
 
         {safeImageUrl ? (
           <div
-            className={`relative mb-8 w-full overflow-hidden rounded-lg border border-white/[0.08] ${detailImageClass(imageRole)}`}
+            className={`relative mb-8 w-full overflow-hidden rounded-lg border border-line ${detailImageClass(imageRole)}`}
           >
             <img
               src={safeImageUrl}
@@ -127,16 +127,16 @@ export default async function EventDetailPage({
           <p className={`text-[12px] font-semibold uppercase tracking-[0.16em] ${tier.badge}`}>
             {tier.label}
           </p>
-          <p className="mt-4 text-[15px] font-medium text-zinc-100">{sourceName}</p>
+          <p className="mt-4 text-[15px] font-medium text-ink">{sourceName}</p>
           {displayTime ? (
             <time
-              className="mt-1 block text-[13px] text-zinc-400"
+              className="mt-1 block text-[13px] text-muted"
               dateTime={event.event_time ?? event.created_at}
             >
               {displayTime}
             </time>
           ) : null}
-          <h1 className="mt-5 text-[2rem] font-semibold leading-[1.18] tracking-[-0.02em] text-white md:text-[2.75rem] xl:text-[3.1rem]">
+          <h1 className="mt-5 text-[2rem] font-semibold leading-[1.18] tracking-[-0.02em] text-ink md:text-[2.75rem] xl:text-[3.1rem]">
             {event.headline}
           </h1>
         </header>
@@ -147,19 +147,19 @@ export default async function EventDetailPage({
         >
           <div className="space-y-12">
             <section>
-              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
                 What happened
               </h2>
               {summary ? (
-                <p className="max-w-[58ch] text-[17px] leading-[1.72] text-zinc-300 md:text-[18px]">
+                <p className="max-w-[58ch] text-[17px] leading-[1.72] text-secondary md:text-[18px]">
                   {summary}
                 </p>
               ) : (
-                <div className="max-w-[58ch] rounded-lg border border-amber-500/20 bg-amber-500/5 px-5 py-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-400">
+                <div className="max-w-[58ch] rounded-lg border border-warning/40 bg-warning/10 px-5 py-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-warning">
                     Incomplete extraction
                   </p>
-                  <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                  <p className="mt-2 text-sm leading-relaxed text-muted">
                     No source-grounded summary is available yet. The primary source remains available.
                   </p>
                 </div>
@@ -167,52 +167,52 @@ export default async function EventDetailPage({
             </section>
 
             <section>
-              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
                 Key changes
               </h2>
               {keyChanges.length > 0 ? (
                 <ol className="max-w-[58ch] space-y-4">
                   {keyChanges.map((item: string, idx: number) => (
                     <li key={idx} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3">
-                      <span className="pt-0.5 font-mono text-[11px] tracking-wider text-zinc-400">
+                      <span className="pt-0.5 font-mono text-[11px] tracking-wider text-muted">
                         {padIndex(idx)}
                       </span>
-                      <span className="text-[15px] leading-relaxed text-zinc-300">{item}</span>
+                      <span className="text-[15px] leading-relaxed text-secondary">{item}</span>
                     </li>
                   ))}
                 </ol>
               ) : (
-                <p className="text-sm text-zinc-400">No structured change list was extracted from the source.</p>
+                <p className="text-sm text-muted">No structured change list was extracted from the source.</p>
               )}
             </section>
 
             <section>
-              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
                 Entities
               </h2>
               {entities.length > 0 ? (
-                <p className="max-w-[58ch] text-[14px] leading-relaxed text-zinc-300">
+                <p className="max-w-[58ch] text-[14px] leading-relaxed text-secondary">
                   {entities.join(' · ')}
                 </p>
               ) : (
-                <p className="text-sm text-zinc-400">None extracted.</p>
+                <p className="text-sm text-muted">None extracted.</p>
               )}
             </section>
           </div>
 
           <aside className="lg:sticky lg:top-8 lg:self-stretch">
-            <section className="flex h-full min-h-[28rem] flex-col rounded-lg border border-white/[0.12] bg-[#0e0e11] p-6 lg:p-7">
-              <h2 className="mb-6 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+            <section className="flex h-full min-h-[28rem] flex-col rounded-lg border border-line bg-elevated p-6 lg:p-7">
+              <h2 className="mb-6 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
                 Evidence
               </h2>
               <div className="flex flex-1 flex-col gap-7">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                     Primary source
                   </p>
-                  <p className="mt-2 text-[15px] font-medium text-zinc-50">{sourceName}</p>
+                  <p className="mt-2 text-[15px] font-medium text-ink">{sourceName}</p>
                   {displayTime ? (
-                    <p className="mt-1 text-[13px] text-zinc-400">{displayTime}</p>
+                    <p className="mt-1 text-[13px] text-muted">{displayTime}</p>
                   ) : null}
                 </div>
 
@@ -222,25 +222,25 @@ export default async function EventDetailPage({
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`${primaryLabel}: ${sourceName}`}
-                    className="inline-flex w-fit items-center gap-2 text-sm font-medium text-sky-400 transition-colors hover:text-sky-300"
+                    className="inline-flex w-fit items-center gap-2 text-sm font-medium text-accent transition-colors hover:text-accent"
                   >
                     {primaryLabel}
                     <span aria-hidden="true">↗</span>
                   </a>
                 ) : (
-                  <p className="text-sm text-zinc-400">No source URL.</p>
+                  <p className="text-sm text-muted">No source URL.</p>
                 )}
 
                 {citations.length > 0 ? (
-                  <div className="border-t border-white/[0.08] pt-6">
-                    <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-400">
+                  <div className="border-t border-line pt-6">
+                    <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-success">
                       Verified quotes
                     </p>
                     <ul className="space-y-4">
                       {citations.map((citation: string, idx: number) => (
                         <li
                           key={idx}
-                          className="border-l-2 border-emerald-400/40 pl-3.5 text-[14px] leading-relaxed text-zinc-300"
+                          className="border-l-2 border-success/40 pl-3.5 text-[14px] leading-relaxed text-secondary"
                         >
                           {citation}
                         </li>
@@ -248,11 +248,11 @@ export default async function EventDetailPage({
                     </ul>
                   </div>
                 ) : (
-                  <div className="border-t border-white/[0.08] pt-6">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                  <div className="border-t border-line pt-6">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                       Source available
                     </p>
-                    <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+                    <p className="mt-2 text-sm leading-relaxed text-muted">
                       Evidence verification unavailable.
                     </p>
                   </div>
@@ -261,8 +261,8 @@ export default async function EventDetailPage({
             </section>
 
             {supporting.length > 0 ? (
-              <section className="mt-5 rounded-lg border border-white/[0.08] bg-[#0e0e11] p-6">
-                <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
+              <section className="mt-5 rounded-lg border border-line bg-elevated p-6">
+                <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
                   Supporting sources
                 </h2>
                 <ul className="space-y-3">
@@ -284,7 +284,7 @@ export default async function EventDetailPage({
                       });
                       return (
                         <li key={idx} className="flex flex-col gap-0.5">
-                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink0">
                             {label}
                           </span>
                           {href ? (
@@ -293,14 +293,14 @@ export default async function EventDetailPage({
                               target="_blank"
                               rel="noopener noreferrer"
                               aria-label={`${label}: ${article.source_name}`}
-                              className="text-sm text-sky-400 hover:text-sky-300"
+                              className="text-sm text-accent hover:text-accent"
                             >
                               {article.source_name}
                             </a>
                           ) : (
-                            <span className="text-sm text-zinc-400">{article.source_name}</span>
+                            <span className="text-sm text-muted">{article.source_name}</span>
                           )}
-                          <span className="line-clamp-1 text-[12px] text-zinc-500">{article.title}</span>
+                          <span className="line-clamp-1 text-[12px] text-ink0">{article.title}</span>
                         </li>
                       );
                     },

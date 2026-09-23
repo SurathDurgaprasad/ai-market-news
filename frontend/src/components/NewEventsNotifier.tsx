@@ -41,12 +41,12 @@ export const NewEventsNotifier: React.FC<{ latestEventTimestamp: string }> = ({
         router.refresh();
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }}
-      className="ml-auto inline-flex flex-col items-start rounded-md border border-sky-400/35 bg-sky-500/10 px-3.5 py-2 text-left transition-colors hover:border-sky-300/50 hover:bg-sky-500/15 sm:ml-0"
+      className="ml-auto inline-flex flex-col items-start rounded-md border border-accent/40 bg-accent/10 px-3.5 py-2 text-left transition-colors hover:border-accent hover:bg-accent/15 sm:ml-0"
     >
-      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-300">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
         {newCount} new development{newCount > 1 ? 's' : ''}
       </span>
-      <span className="mt-0.5 text-[11px] text-sky-200/70">Refresh feed</span>
+      <span className="mt-0.5 text-[11px] text-secondary">Refresh feed</span>
     </button>
   );
 };

@@ -17,7 +17,7 @@ interface AdminSource {
 
 async function getSources(): Promise<AdminSource[]> {
   try {
-    const res = await fetch(`${API_V1}/sources/`, {
+    const res = await fetch(`${API_V1}/sources/?limit=1000`, {
       next: { revalidate: 30 }
     });
     if (!res.ok) throw new Error('API failed');
@@ -32,52 +32,44 @@ export default async function AdminSourcesPage() {
   const sources = await getSources();
 
   return (
-    <main className="min-h-screen bg-[#0a0a0a] text-white">
+    <main className="min-h-screen bg-canvas text-ink">
       <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
-        
-        <header className="mb-8 flex items-center justify-between border-b border-white/10 pb-6">
-          <div>
-            <h1 className="text-3xl font-bold">Admin: Source Management</h1>
-            <p className="mt-2 text-gray-400">Manage ingestion sources, health status, and tiers.</p>
-          </div>
-          <button className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-500">
-            + Add Source
-          </button>
+        <header className="mb-8 border-b border-line pb-6">
+          <h1 className="text-3xl font-semibold">Sources</h1>
+          <p className="mt-2 text-muted">
+            Ingestion health for the registry. Add or disable a source with manage_sources.py; the scheduler picks it up on the next tick.
+          </p>
         </header>
 
-        <div className="overflow-hidden rounded-lg border border-white/10 bg-white/5">
-          <table className="min-w-full divide-y divide-white/10">
-            <thead className="bg-white/5">
+        <div className="overflow-hidden rounded-lg border border-line bg-surface">
+          <table className="min-w-full divide-y divide-line">
+            <thead className="bg-elevated">
               <tr>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400">Source Name</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400">Tier</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400">Health</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-400">Last Fetch</th>
-                <th scope="col" className="relative px-6 py-3"><span className="sr-only">Edit</span></th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted">Source Name</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted">Tier</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted">Health</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-muted">Last Fetch</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/10 bg-transparent">
+            <tbody className="divide-y divide-line">
               {sources.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-sm text-gray-500">
+                  <td colSpan={4} className="px-6 py-8 text-center text-sm text-muted">
                     No sources found or backend unreachable.
                   </td>
                 </tr>
               ) : (
                 sources.map((source: AdminSource) => (
-                  <tr key={source.id} className="hover:bg-white/5 transition-colors">
-                    <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-white">{source.name}</td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-300">{source.tier}</td>
+                  <tr key={source.id}>
+                    <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-ink">{source.name}</td>
+                    <td className="whitespace-nowrap px-6 py-4 text-sm text-secondary">{source.tier}</td>
                     <td className="whitespace-nowrap px-6 py-4 text-sm">
-                      <span className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${source.health_status === 'healthy' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                        {source.health_status}
+                      <span className={source.health_status === 'healthy' ? 'text-success' : source.health_status === 'failing' ? 'text-danger' : 'text-warning'}>
+                        {source.enabled ? source.health_status : 'disabled'}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-300">
+                    <td className="whitespace-nowrap px-6 py-4 text-sm text-secondary">
                       {source.last_fetch_at ? new Date(source.last_fetch_at).toLocaleString() : 'Never'}
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-right text-sm font-medium">
-                      <a href="#" className="text-blue-400 hover:text-blue-300">Edit</a>
                     </td>
                   </tr>
                 ))

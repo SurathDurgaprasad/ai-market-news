@@ -212,19 +212,21 @@ since they represent real future-upgrade thinking:
   (`backend/app/core/config.py`) for the unused Celery broker. Not
   connected to anything at runtime.
 
-## 7. Deployment — `PARTIALLY IMPLEMENTED`
+## 7. Deployment — `CURRENT` local process, Docker not the supported path
 
-- `backend/Dockerfile` builds the FastAPI backend as a container.
-- Root `docker-compose.yml` currently reflects the real system: backend
-  (SQLite, volume-mounted for the db file) + frontend, no Postgres/Redis/
-  Celery services. (This file was rewritten alongside this document —
-  see `docs/ENGINEERING_STATUS.md`, `DOC-01`, for what it looked like
-  before.)
-- No CI/CD pipeline, no production hosting configuration, no secrets
-  manager integration beyond reading environment variables
-  (`backend/app/core/config.py` also opportunistically hydrates from
-  Windows user/machine environment variables via the registry, for local
-  dev convenience — `_hydrate_os_environ`).
+The supported way to run this product is a local Python virtualenv and
+`npm`, documented in the root `README.md`. A clean checkout creates the
+SQLite file on startup and loads sources from `backend/sources.registry.json`.
+
+- `backend/Dockerfile` and root `docker-compose.yml` describe a single
+  backend container with a SQLite volume. They are not the verified
+  bootstrap. Do not treat them as the deployment guide.
+- No CI/CD pipeline and no secrets manager. Configuration is environment
+  variables or `backend/.env` (see `backend/.env.example`). On Windows,
+  `backend/app/core/config.py` can also read a few keys from the user
+  environment registry when the process did not inherit them. A portable
+  setup uses `.env` and does not depend on that.
+- `Settings.REDIS_URL` is unused. Ingestion does not use Redis or Celery.
 
 ## 8. Planned / future directions — `PLANNED / FUTURE`, not started
 
