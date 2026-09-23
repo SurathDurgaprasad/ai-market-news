@@ -1,7 +1,7 @@
 """Overview counts come from canonical events, not article copies."""
 from datetime import datetime, timezone
 
-from app.core.market import MarketEvent, build_market_overview, market_category
+from app.core.market import MarketEvent, build_market_overview, market_category, source_availability
 
 
 def _event(
@@ -56,7 +56,7 @@ def test_two_publishers_can_trend_a_real_category():
     overview = build_market_overview(
         [
             _event("a", "Lab publishes an agent benchmark", 70, TODAY, kind="research", entities=["OpenAI"], source_name="OpenAI Blog", tiers=["primary"], summary="A new agent benchmark."),
-            _event("b", "Second lab covers the agent benchmark", 60, YESTERDAY, kind="research", source_name="MIT Technology Review", tiers=["secondary"], summary="Coverage of the agent benchmark."),
+            _event("b", "Vendor ships a support agent for operations", 70, YESTERDAY, kind="capability", source_name="MIT Technology Review", tiers=["secondary"], summary="A separate support agent for operations."),
         ],
         now=NOW,
     )
@@ -66,7 +66,7 @@ def test_two_publishers_can_trend_a_real_category():
     assert agents["week"] == 2
     assert agents["sources"] == 2
     assert agents["recent"] == 2
-    assert agents["activity"] == ""
+    assert "activity" not in agents
 
 
 def test_week_old_importance_is_not_happening_now():
@@ -233,19 +233,20 @@ def test_a_named_model_is_categorized_when_the_kind_is_generic():
     assert market_category(event) == "Models"
 
 
-def test_recent_cluster_is_the_only_high_activity_label():
+def test_recent_cluster_is_reported_as_a_count():
     third = datetime(2026, 9, 22, 20, 0, tzinfo=timezone.utc)
     overview = build_market_overview(
         [
             _event("a", "First agent benchmark", 70, TODAY, kind="research", summary="An agent benchmark.", source_name="OpenAI Blog", tiers=["primary"]),
             _event("b", "Second agent note", 60, YESTERDAY, kind="research", summary="Another agent result.", source_name="MIT Technology Review", tiers=["secondary"]),
-            _event("c", "Third agent note", 60, third, kind="capability", summary="A further agent result.", source_name="The Verge", tiers=["secondary"]),
+            _event("c", "Third agent result", 70, third, kind="capability", summary="A further agent result.", source_name="The Verge", tiers=["secondary"]),
         ],
         now=NOW,
     )
     agents = next(item for item in overview["trending"] if item["label"] == "Agents")
-    assert agents["activity"] == "High"
+    assert agents["recent"] == 3
     assert agents["sources"] == 3
+    assert "activity" not in agents
 
 
 def test_a_model_release_outranks_a_personnel_note():
@@ -273,6 +274,101 @@ def test_a_customer_deployment_is_not_a_significant_development():
     assert amazon["significant"] == 1
 
 
+def test_a_summary_mention_does_not_recategorize_a_model_release():
+    event = _event(
+        "a",
+        "Lab launches a system on a cloud platform",
+        80,
+        TODAY,
+        kind="model_release",
+        summary="The writeup mentions an agent workflow in passing.",
+    )
+    assert market_category(event) == "Models"
+
+
+def test_research_kind_does_not_invent_a_research_source():
+    event = _event(
+        "a",
+        "A laboratory publishes a result",
+        70,
+        TODAY,
+        kind="research",
+        tiers=["secondary"],
+        source_name="Example Review",
+    )
+    assert source_availability(event) == "Supporting coverage"
+
+
+def test_repeated_coverage_occupies_one_now_slot():
+    overview = build_market_overview(
+        [
+            _event(
+                "intro",
+                "Introduction of Northwind 4.2 for general reasoning",
+                80,
+                TODAY,
+                kind="model_release",
+                source_name="Northwind Blog",
+                org="OpenAI",
+                tiers=["primary"],
+            ),
+            _event(
+                "dist",
+                "Northwind 4.2 for general reasoning now available on a cloud",
+                90,
+                TODAY,
+                kind="model_release",
+                source_name="Cloud Blog",
+                org="Amazon",
+                tiers=["primary"],
+            ),
+            _event(
+                "chip",
+                "Vendor unveils a local inference processor",
+                75,
+                YESTERDAY,
+                kind="hardware_platform",
+                source_name="Vendor News",
+                entities=["NVIDIA"],
+                tiers=["secondary"],
+            ),
+        ],
+        now=NOW,
+    )
+    now_ids = [item["id"] for item in overview["happening_now"]]
+    assert not ({"intro", "dist"} <= set(now_ids))
+    assert "intro" in now_ids or "dist" in now_ids
+    assert "chip" in now_ids
+
+
+def test_overlapping_coverage_counts_as_one_development():
+    overview = build_market_overview(
+        [
+            _event(
+                "a",
+                "Investigation reveals failures in regional border surveillance",
+                75,
+                MONDAY,
+                kind="research",
+                tiers=["secondary"],
+                source_name="Review Desk",
+            ),
+            _event(
+                "b",
+                "Regional border surveillance fails during the investigation",
+                70,
+                MONDAY,
+                kind="research",
+                tiers=["research"],
+                source_name="Field Journal",
+            ),
+        ],
+        now=NOW,
+    )
+    research = next(item for item in overview["pulse"] if item["label"] == "Research")
+    assert research["week"] == 1
+
+
 def test_category_is_keyword_before_a_generic_kind():
     event = _event(
         "a",
@@ -283,3 +379,75 @@ def test_category_is_keyword_before_a_generic_kind():
         summary="The coding agent writes software.",
     )
     assert market_category(event) == "Coding"
+
+
+def test_pulse_examples_do_not_repeat_one_development():
+    overview = build_market_overview(
+        [
+            _event("intro", "Introduction of Northwind 4.2 for general reasoning", 80, TODAY, kind="model_release", org="OpenAI", source_name="Northwind Blog", tiers=["primary"]),
+            _event("dist", "Northwind 4.2 for general reasoning now available on a cloud", 85, TODAY, kind="model_release", org="Amazon", source_name="Cloud Blog", tiers=["primary"]),
+            _event("other", "Harbor introduces a separate reasoning model", 75, YESTERDAY, kind="model_release", org="Anthropic", entities=["Anthropic"], source_name="The Verge", tiers=["secondary"]),
+        ],
+        now=NOW,
+    )
+    models = next(item for item in overview["pulse"] if item["label"] == "Models")
+    headlines = [example["headline"] for example in models["examples"]]
+    assert sum("Northwind 4.2" in headline for headline in headlines) == 1
+    assert "Harbor introduces a separate reasoning model" in headlines
+
+
+def test_published_volume_is_not_substantive_activity():
+    overview = build_market_overview(
+        [
+            _event("model", "Amazon announces a foundation model", 80, TODAY, kind="model_release", entities=["Amazon"], source_name="AWS Machine Learning Blog", org="Amazon", tiers=["primary"]),
+            _event("hire", "A researcher joins the Amazon lab", 80, YESTERDAY, kind="partnership", entities=["Amazon"], source_name="AWS Machine Learning Blog", org="Amazon", tiers=["primary"]),
+            _event("deploy", "A retailer implements an Amazon platform", 80, YESTERDAY, entities=["Amazon"], source_name="AWS Machine Learning Blog", org="Amazon", tiers=["primary"]),
+        ],
+        now=NOW,
+    )
+    amazon = next(item for item in overview["players"] if item["slug"] == "amazon")
+    assert amazon["week"] == 3
+    assert amazon["substantive"] == 1
+
+
+def test_a_second_major_release_is_not_crowded_out():
+    fillers = [
+        _event("sec", "Lab discloses a malware campaign", 55, TODAY, kind="security_incident", source_name="Security Desk"),
+        _event("hw", "Vendor unveils a local inference processor", 55, TODAY, kind="hardware_platform", source_name="Hardware Desk"),
+        _event("oss", "Project publishes an open source runtime", 55, TODAY, kind="open_source_release", source_name="Code Desk"),
+        _event("fund", "Startup closes a funding round", 55, TODAY, kind="funding", source_name="Deal Desk"),
+        _event("bench", "Lab publishes a benchmark suite", 55, TODAY, kind="benchmark", source_name="Eval Desk"),
+    ]
+    overview = build_market_overview(
+        fillers
+        + [
+            _event("first", "Northwind introduces a reasoning model", 80, TODAY, kind="model_release", org="OpenAI", source_name="OpenAI Blog", tiers=["primary"]),
+            _event("second", "Harbor introduces a separate reasoning model", 85, YESTERDAY, kind="model_release", org="Anthropic", entities=["Anthropic"], source_name="The Verge", tiers=["secondary"]),
+        ],
+        now=NOW,
+    )
+    now_ids = [item["id"] for item in overview["happening_now"]]
+    assert "first" in now_ids
+    assert "second" in now_ids
+    assert len(now_ids) <= 6
+
+
+def test_concentrated_recent_activity_ranks_ahead_of_a_larger_older_set():
+    recent_agents = [
+        _event("a1", "Vendor ships a support agent for operations", 70, TODAY, kind="capability", source_name="First Desk"),
+        _event("a2", "Laboratory deploys a maintenance agent", 70, YESTERDAY, kind="capability", source_name="Second Desk"),
+    ]
+    older_models = [
+        _event("m1", "Atlas releases a vision model", 70, MONDAY, kind="model_release", source_name="Atlas Blog", tiers=["primary"]),
+        _event("m2", "Beacon releases a speech model", 70, MONDAY, kind="model_release", source_name="Beacon Blog", tiers=["primary"]),
+        _event("m3", "Cedar releases a retrieval model", 70, MONDAY, kind="model_release", source_name="Cedar Blog", tiers=["primary"]),
+        _event("m4", "Delta releases a compact model", 70, TODAY, kind="model_release", source_name="Delta Blog", tiers=["primary"]),
+    ]
+    overview = build_market_overview(recent_agents + older_models, now=NOW)
+    assert overview["trending"][0]["label"] == "Agents"
+    assert "emerging" not in overview["trending"][0]
+    agents = next(item for item in overview["pulse"] if item["label"] == "Agents")
+    assert [example["headline"] for example in agents["examples"]] == [
+        "Vendor ships a support agent for operations",
+        "Laboratory deploys a maintenance agent",
+    ]

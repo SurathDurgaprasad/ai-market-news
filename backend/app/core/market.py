@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from app.core.deduplication import STOP_WORDS
+
 NOW_WINDOW = timedelta(hours=36)
 DAY_WINDOW = timedelta(hours=24)
 
@@ -147,9 +149,10 @@ def market_category(event: MarketEvent) -> Optional[str]:
     headline = event.headline or ""
     if kind == "security_incident" or _HEADLINE_SECURITY.search(headline):
         return "Security"
-    text = " ".join([headline, event.summary or "", " ".join(event.entities)])
+    # Headline only. A summary mention of a generic word such as "agent"
+    # must not pull a model release into another category.
     for label, pattern in _CATEGORY_RULES:
-        if pattern.search(text):
+        if pattern.search(headline):
             return label
     if _HEADLINE_CODING.search(headline):
         return "Coding"
@@ -177,6 +180,30 @@ def _substance(event: MarketEvent) -> int:
     return max(_SUBSTANCE.get(kind, 0), _CATEGORY_SUBSTANCE.get(category, 0))
 
 
+_HIGH_KINDS = {
+    "model_release",
+    "model_family",
+    "hardware_platform",
+    "security_incident",
+    "research",
+    "benchmark",
+    "open_source_release",
+    "funding",
+    "acquisition",
+}
+
+_CONTENT_TOKEN = re.compile(r"[a-z0-9][a-z0-9.+-]{2,}")
+_GENERIC_TOKENS = STOP_WORDS | {
+    "model", "models", "system", "systems", "platform", "technology",
+    "research", "software", "service", "services", "data", "cloud",
+    "global", "company", "companies", "development", "developments",
+    "intelligence", "artificial", "machine", "learning", "using",
+    "their", "this", "that", "with", "from", "into", "over", "about",
+    "have", "been", "will", "after", "before", "near", "more", "most",
+}
+_DISTRIBUTION = re.compile(r"\b(available on|now available|released on)\b", re.I)
+
+
 def is_significant_development(event: MarketEvent) -> bool:
     """Importance band, excluding customer deployments and roundups."""
     if event.importance < 70:
@@ -184,6 +211,23 @@ def is_significant_development(event: MarketEvent) -> bool:
     if is_roundup(event) or _is_customer_deployment(event):
         return False
     return True
+
+
+def is_substantive_development(event: MarketEvent) -> bool:
+    """
+    A reader-level development, not a discussion, roundup, or customer post.
+
+    Publisher volume alone does not qualify. A stored high-substance kind
+    does, and so does importance >= 70 when the headline supports a category.
+    """
+    if is_discussion(event) or is_roundup(event) or _is_customer_deployment(event):
+        return False
+    kind = (event.event_kind or "other").strip().lower()
+    if kind == "partnership":
+        return False
+    if kind in _HIGH_KINDS and event.importance >= 50:
+        return True
+    return event.importance >= 70 and bool(market_category(event))
 
 
 def importance_label(score: int) -> str:
@@ -197,14 +241,15 @@ def importance_label(score: int) -> str:
 
 
 def source_availability(event: MarketEvent) -> str:
-    tiers = {(tier or "").lower() for tier in event.source_tiers}
-    if "primary" in tiers:
+    """Provenance from stored source tiers. Event kind is not a source."""
+    tier = _best_tier(event)
+    if tier == "primary":
         return "Official source"
-    if "research" in tiers or (event.event_kind or "") == "research":
+    if tier == "research":
         return "Research"
-    if "secondary" in tiers:
+    if tier == "secondary":
         return "Supporting coverage"
-    if "community" in tiers:
+    if tier == "community":
         return "Discussion"
     return ""
 
@@ -285,7 +330,7 @@ def _best_tier(event: MarketEvent) -> str:
     tiers = {(tier or "").lower() for tier in event.source_tiers}
     if "primary" in tiers:
         return "primary"
-    if "research" in tiers or (event.event_kind or "") == "research":
+    if "research" in tiers:
         return "research"
     if "secondary" in tiers:
         return "secondary"
@@ -358,18 +403,167 @@ def _quality_key(event: MarketEvent, moment: datetime) -> tuple:
     )
 
 
-def _take_diverse(events: list[MarketEvent], limit: int, per_org: int) -> list[MarketEvent]:
-    chosen: list[MarketEvent] = []
-    seen: dict[str, int] = {}
+def _content_tokens(headline: str) -> set[str]:
+    return {
+        token
+        for token in _CONTENT_TOKEN.findall((headline or "").lower())
+        if token not in _GENERIC_TOKENS
+    }
+
+
+def _same_reader_development(left: MarketEvent, right: MarketEvent) -> bool:
+    """
+    True when two headlines are coverage of one reader-level development.
+
+    Requires several shared content words, not a single generic term.
+    """
+    left_tokens = _content_tokens(left.headline)
+    right_tokens = _content_tokens(right.headline)
+    if len(left_tokens) < 3 or len(right_tokens) < 3:
+        return False
+    shared = left_tokens & right_tokens
+    if len(shared) < 3:
+        return False
+    union = len(left_tokens | right_tokens)
+    jaccard = len(shared) / union if union else 0
+    overlap = len(shared) / min(len(left_tokens), len(right_tokens))
+    return jaccard >= 0.4 or overlap >= 0.5
+
+
+def _cluster_map(events: list[MarketEvent]) -> dict[str, str]:
+    """Map event id to a stable cluster id. Related headlines share an id."""
+    parent = {event.id: event.id for event in events}
+
+    def find(event_id: str) -> str:
+        while parent[event_id] != event_id:
+            parent[event_id] = parent[parent[event_id]]
+            event_id = parent[event_id]
+        return event_id
+
+    for index, left in enumerate(events):
+        for right in events[index + 1 :]:
+            if not _same_reader_development(left, right):
+                continue
+            left_root = find(left.id)
+            right_root = find(right.id)
+            if left_root != right_root:
+                parent[right_root] = left_root
+    return {event.id: find(event.id) for event in events}
+
+
+def _representative(group: list[MarketEvent], moment: datetime) -> MarketEvent:
+    def key(event: MarketEvent) -> tuple:
+        distribution = 1 if _DISTRIBUTION.search(event.headline or "") else 0
+        return (0 if distribution else 1, _quality_key(event, moment))
+
+    return max(group, key=key)
+
+
+def _representatives(events: list[MarketEvent], moment: datetime) -> list[MarketEvent]:
+    if not events:
+        return []
+    clusters = _cluster_map(events)
+    grouped: dict[str, list[MarketEvent]] = {}
     for event in events:
+        grouped.setdefault(clusters[event.id], []).append(event)
+    return [_representative(group, moment) for group in grouped.values()]
+
+
+def _select_diverse(
+    events: list[MarketEvent],
+    moment: datetime,
+    limit: int,
+    per_org: int,
+    per_category: int,
+) -> list[MarketEvent]:
+    ranked = sorted(events, key=lambda event: _quality_key(event, moment), reverse=True)
+    chosen: list[MarketEvent] = []
+    orgs: dict[str, int] = {}
+    categories: dict[str, int] = {}
+    for event in ranked:
         org = _display_organization(event) or event.id
-        if seen.get(org, 0) >= per_org:
+        category = market_category(event) or ""
+        if orgs.get(org, 0) >= per_org:
             continue
-        seen[org] = seen.get(org, 0) + 1
+        if category and categories.get(category, 0) >= per_category:
+            continue
+        orgs[org] = orgs.get(org, 0) + 1
+        if category:
+            categories[category] = categories.get(category, 0) + 1
         chosen.append(event)
         if len(chosen) == limit:
             break
     return chosen
+
+
+def _select_now(events: list[MarketEvent], moment: datetime) -> list[MarketEvent]:
+    """
+    One organization and one category first, so comparable items spread out.
+    A second item in a category is allowed only when it is itself a major
+    substantive development and comes from a different organization.
+    """
+    ranked = sorted(events, key=lambda event: _quality_key(event, moment), reverse=True)
+    strong = [event for event in ranked if _substance(event) >= 3 or event.importance >= 80]
+    chosen: list[MarketEvent] = []
+    orgs: dict[str, int] = {}
+    categories: dict[str, int] = {}
+    deferred: list[MarketEvent] = []
+
+    def take(event: MarketEvent) -> None:
+        org = _display_organization(event) or event.id
+        category = market_category(event) or ""
+        orgs[org] = orgs.get(org, 0) + 1
+        if category:
+            categories[category] = categories.get(category, 0) + 1
+        chosen.append(event)
+
+    for event in strong:
+        org = _display_organization(event) or event.id
+        category = market_category(event) or ""
+        if orgs.get(org, 0) >= 1:
+            continue
+        if category and categories.get(category, 0) >= 1:
+            deferred.append(event)
+            continue
+        take(event)
+        if len(chosen) >= 6:
+            break
+    for event in deferred:
+        if len(chosen) >= 6:
+            break
+        if event.importance < 80 or _substance(event) < 3:
+            continue
+        org = _display_organization(event) or event.id
+        category = market_category(event) or ""
+        if orgs.get(org, 0) >= 1:
+            continue
+        if category and categories.get(category, 0) >= 2:
+            continue
+        take(event)
+    if len(chosen) < 4:
+        extra = _select_diverse(ranked, moment, 6, 2, 2)
+        seen = {event.id for event in chosen}
+        for event in extra:
+            if event.id in seen:
+                continue
+            chosen.append(event)
+            if len(chosen) >= 4:
+                break
+    chosen.sort(key=lambda event: _quality_key(event, moment), reverse=True)
+    return chosen[:6]
+
+
+def _is_emerging(recent_clusters: int, week_clusters: int, publishers: int) -> bool:
+    """
+    Internal signal: recent activity is a large share of this week's
+    distinct developments, from more than one publisher.
+
+    There is no earlier baseline in the feed, so this compares the last
+    36 hours with the current week only.
+    """
+    if week_clusters < 2 or recent_clusters < 2 or publishers < 2:
+        return False
+    return (recent_clusters / week_clusters) >= 0.4
 
 
 def _distinct_sources(events: list[MarketEvent]) -> int:
@@ -379,52 +573,67 @@ def _distinct_sources(events: list[MarketEvent]) -> int:
     return len({event.primary_source_name for event in events if event.primary_source_name})
 
 
-def _activity_label(recent: int, sources: int) -> str:
-    """Only when the recent window itself holds a measurable cluster."""
-    if recent >= 3 and sources >= 2:
-        return "High"
-    return ""
+def _example_cards(events: list[MarketEvent], moment: datetime) -> list[dict]:
+    ranked = sorted(
+        _representatives(events, moment),
+        key=lambda event: _quality_key(event, moment),
+        reverse=True,
+    )
+    examples = []
+    seen_orgs: set[str] = set()
+    for event in ranked:
+        if is_discussion(event) or is_roundup(event) or _is_customer_deployment(event):
+            continue
+        org = _display_organization(event) or event.id
+        if org in seen_orgs:
+            continue
+        seen_orgs.add(org)
+        examples.append({"id": event.id, "headline": event.headline})
+        if len(examples) == 2:
+            break
+    return examples
 
 
 def build_market_overview(events: list[MarketEvent], now: Optional[datetime] = None) -> dict:
     """
     Current-week overview.
 
-    Happening now: meaningful developments in the last 36 hours. Official
-    and research items outrank discussion and roundups when any exist.
-    Trending: a category with at least two events from two publishers and
-    at least one event in that 36-hour window.
-    Biggest: high-importance direct developments elsewhere in the week.
+    Counts that describe the market are distinct reader-level developments.
+    Repeated coverage of the same headline cluster counts once.
+    Now is the last 36 hours. A distribution post does not take a second
+    Now slot when the announcement is already represented.
     """
     moment = _utc(now or datetime.now(timezone.utc))
     prepared = [event for event in events if event.occurred_at is not None]
     prepared.sort(key=lambda event: _utc(event.occurred_at), reverse=True)
+    clusters = _cluster_map(prepared)
 
     def in_now(event: MarketEvent) -> bool:
         return _within(event, moment, NOW_WINDOW)
 
-    def in_day(event: MarketEvent) -> bool:
-        return _within(event, moment, DAY_WINDOW)
-
     window = [event for event in prepared if in_now(event)]
     direct = [
         event for event in window
-        if not is_discussion(event) and not is_roundup(event) and event.importance >= 50
+        if not is_discussion(event)
+        and not is_roundup(event)
+        and not _is_customer_deployment(event)
+        and event.importance >= 50
     ]
-    now_pool = direct if direct else [event for event in window if event.importance >= 50] or window
-    now_pool.sort(key=lambda event: _quality_key(event, moment), reverse=True)
-    happening = _take_diverse(now_pool, limit=6, per_org=2)
+    now_pool = _representatives(direct if direct else window, moment)
+    happening = _select_now(now_pool, moment)
     happening_ids = {event.id for event in happening}
+    happening_clusters = {clusters[event.id] for event in happening}
 
     biggest_pool = [
         event for event in prepared
-        if event.id not in happening_ids and event.importance >= 70
+        if event.id not in happening_ids
+        and clusters[event.id] not in happening_clusters
+        and event.importance >= 70
+        and not is_discussion(event)
+        and not is_roundup(event)
+        and not _is_customer_deployment(event)
     ]
-    direct_big = [event for event in biggest_pool if not is_discussion(event) and not is_roundup(event)]
-    if direct_big:
-        biggest_pool = direct_big
-    biggest_pool.sort(key=lambda event: _quality_key(event, moment), reverse=True)
-    biggest = _take_diverse(biggest_pool, limit=4, per_org=1)
+    biggest = _select_diverse(_representatives(biggest_pool, moment), moment, 4, 1, 2)
 
     by_category: dict[str, list[MarketEvent]] = {}
     for event in prepared:
@@ -435,24 +644,39 @@ def build_market_overview(events: list[MarketEvent], now: Optional[datetime] = N
 
     pulse = []
     trending = []
-    for label, group in sorted(by_category.items(), key=lambda item: (-len(item[1]), item[0])):
-        week_count = len(group)
-        day_count = sum(1 for event in group if in_day(event))
-        pulse_row = {"label": label, "week": week_count}
-        if day_count:
-            pulse_row["recent"] = day_count
-        pulse.append(pulse_row)
-        recent_count = sum(1 for event in group if in_now(event))
-        sources = _distinct_sources(group)
-        if week_count >= 2 and recent_count >= 1 and sources >= 2:
+    for label, group in by_category.items():
+        substantive = [event for event in group if is_substantive_development(event)]
+        cluster_ids = {clusters[event.id] for event in substantive}
+        if not cluster_ids:
+            continue
+        recent_ids = {clusters[event.id] for event in substantive if in_now(event)}
+        sources = _distinct_sources(substantive)
+        emerging = _is_emerging(len(recent_ids), len(cluster_ids), sources)
+        row = {
+            "label": label,
+            "week": len(cluster_ids),
+            "sources": sources,
+            "emerging": emerging,
+        }
+        if recent_ids:
+            row["recent"] = len(recent_ids)
+        if emerging or (len(cluster_ids) >= 2 and sources >= 2 and recent_ids):
+            row["examples"] = _example_cards(substantive, moment)
+        pulse.append(row)
+        if len(cluster_ids) >= 2 and sources >= 2 and recent_ids:
             trending.append({
                 "label": label,
-                "week": week_count,
+                "week": len(cluster_ids),
                 "sources": sources,
-                "recent": recent_count,
-                "activity": _activity_label(recent_count, sources),
+                "recent": len(recent_ids),
+                "emerging": emerging,
             })
-    trending.sort(key=lambda item: (-item["recent"], -item["week"], -item["sources"], item["label"]))
+    pulse.sort(key=lambda item: (-int(item["emerging"]), -item["week"], item["label"]))
+    for row in pulse:
+        row.pop("emerging", None)
+    trending.sort(key=lambda item: (-int(item["emerging"]), -item["recent"], -item["week"], item["label"]))
+    for row in trending:
+        row.pop("emerging", None)
     trending = trending[:4]
 
     player_groups: dict[str, list[MarketEvent]] = {}
@@ -465,20 +689,35 @@ def build_market_overview(events: list[MarketEvent], now: Optional[datetime] = N
         group = player_groups.get(slug) or []
         if not group:
             continue
-        latest = max(group, key=lambda event: _utc(event.occurred_at))
-        significant = sum(1 for event in group if is_significant_development(event))
-        players.append({
+        substantive = [event for event in group if is_substantive_development(event)]
+        latest_pool = substantive or group
+        latest = max(latest_pool, key=lambda event: _utc(event.occurred_at))
+        category_counts: dict[str, int] = {}
+        for event in substantive or group:
+            category = market_category(event)
+            if category:
+                category_counts[category] = category_counts.get(category, 0) + 1
+        top_categories = [
+            label for label, _count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
+        ][:2]
+        recent = sum(1 for event in substantive if in_now(event))
+        player = {
             "slug": slug,
             "name": name,
             "week": len(group),
-            "significant": significant,
+            "substantive": len(substantive),
+            "significant": sum(1 for event in group if is_significant_development(event)),
             "sources": _distinct_sources(group),
             "latest_headline": latest.headline,
             "latest_event_id": latest.id,
             "latest_time": _utc(latest.occurred_at).isoformat(),
+            "categories": top_categories,
             "event_ids": [event.id for event in sorted(group, key=lambda item: _utc(item.occurred_at), reverse=True)],
-        })
-    players.sort(key=lambda item: (-item["significant"], -item["sources"], -item["week"], item["name"]))
+        }
+        if recent:
+            player["recent"] = recent
+        players.append(player)
+    players.sort(key=lambda item: (-item["substantive"], -item["sources"], -item["week"], item["name"]))
 
     return {
         "as_of": moment.isoformat(),
