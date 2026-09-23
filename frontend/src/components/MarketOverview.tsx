@@ -16,24 +16,34 @@ export type OverviewCard = {
 
 export type ActivityCount = {
   label: string;
-  today: number;
   week: number;
+  recent?: number;
+};
+
+export type TrendActivity = {
+  label: string;
+  week: number;
+  sources: number;
+  recent: number;
+  activity?: string;
 };
 
 export type PlayerActivity = {
   slug: string;
   name: string;
-  today: number;
   week: number;
+  significant: number;
+  sources: number;
   latest_headline: string;
   latest_event_id: string;
+  latest_time?: string;
   event_ids: string[];
 };
 
 export type MarketOverviewData = {
   as_of: string;
   happening_now: OverviewCard[];
-  trending: ActivityCount[];
+  trending: TrendActivity[];
   biggest: OverviewCard[];
   pulse: ActivityCount[];
   players: PlayerActivity[];
@@ -110,13 +120,14 @@ function CountTable({
   rows: ActivityCount[];
   caption: string;
 }) {
+  const showRecent = rows.some((row) => (row.recent ?? 0) > 0);
   return (
     <table className="w-full text-left text-[13px]">
       <caption className="sr-only">{caption}</caption>
       <thead>
         <tr className="border-b border-line text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
           <th className="py-2 pr-3 font-semibold">Topic</th>
-          <th className="py-2 pr-3 text-right font-semibold">Today</th>
+          {showRecent ? <th className="py-2 pr-3 text-right font-semibold">24h</th> : null}
           <th className="py-2 text-right font-semibold">This week</th>
         </tr>
       </thead>
@@ -126,13 +137,47 @@ function CountTable({
             <th className="py-2.5 pr-3 font-medium text-ink" scope="row">
               {row.label}
             </th>
-            <td className="py-2.5 pr-3 text-right tabular-nums text-secondary">{row.today}</td>
+            {showRecent ? (
+              <td className="py-2.5 pr-3 text-right tabular-nums text-secondary">{row.recent ?? 0}</td>
+            ) : null}
             <td className="py-2.5 text-right tabular-nums text-secondary">{row.week}</td>
           </tr>
         ))}
       </tbody>
     </table>
   );
+}
+
+function TrendList({ rows }: { rows: TrendActivity[] }) {
+  return (
+    <div>
+      {rows.map((row) => {
+        const sources = countLabel(row.sources, "independent source", "independent sources");
+        return (
+          <article key={row.label} className="border-b border-line py-3 last:border-b-0">
+            <h3 className="text-[12px] font-semibold uppercase tracking-[0.16em] text-ink">{row.label}</h3>
+            <p className="mt-1 text-[13px] text-secondary">
+              {row.week} developments this week · {sources}
+            </p>
+            {row.activity ? (
+              <p className="mt-1 text-[12px] text-muted">Recent activity: {row.activity}</p>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function playerStats(player: PlayerActivity): string {
+  const parts = [`${player.week} ${player.week === 1 ? "development" : "developments"}`];
+  if (player.significant > 0) {
+    parts.push(`${player.significant} significant`);
+  }
+  if (player.sources > 0) {
+    parts.push(countLabel(player.sources, "source", "sources"));
+  }
+  return parts.join(" · ");
 }
 
 export function MarketOverview({ data }: { data: MarketOverviewData }) {
@@ -158,7 +203,7 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
             id="happening-now"
             kicker="Now"
             title="What's happening now"
-            note="Important developments from today and the last 18 hours."
+            note="Most meaningful developments in the last 36 hours. Times in UTC."
           />
           <div>
             {happening.map((card) => (
@@ -178,7 +223,7 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
                 title="Trending"
                 note="Categories with recent activity from more than one publisher."
               />
-              <CountTable rows={trending} caption="Trending categories" />
+              <TrendList rows={trending} />
             </section>
           ) : null}
           {pulse.length > 0 ? (
@@ -187,7 +232,7 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
                 id="market-pulse"
                 kicker="This week"
                 title="AI market pulse"
-                note="Canonical events by category. Counts only."
+                note="This week, Monday–Sunday UTC. A 24h count appears only when that window has events."
               />
               <CountTable rows={pulse} caption="Activity by category" />
             </section>
@@ -201,7 +246,7 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
             id="biggest"
             kicker="This week"
             title="Biggest AI developments"
-            note="High-importance events that are not already in the current list."
+            note="Direct developments this week, by importance and source quality."
           />
           <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
             {biggest.map((card) => (
@@ -246,9 +291,12 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
                     {player.latest_headline}
                   </Link>
                 </p>
-                <p className="text-[12px] tabular-nums text-muted md:text-right">
-                  {player.today} today · {player.week} this week
-                </p>
+                <div className="text-[12px] tabular-nums text-muted md:text-right">
+                  <p>{playerStats(player)}</p>
+                  {player.latest_time ? (
+                    <p className="mt-1 tracking-wide">{formatUtcInstrument(player.latest_time)}</p>
+                  ) : null}
+                </div>
               </article>
             ))}
           </div>
