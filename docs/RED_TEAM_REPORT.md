@@ -18,6 +18,49 @@ is secure"; read it as "section X has not been attacked yet."
 
 ## Findings
 
+### SOURCE-REGISTRY-DUP-01 — Correcting a stale feed URL orphaned the old source row instead of updating it
+- **Severity:** Low (data-quality/observability — visible on the real
+  admin sources page, does not affect the events dashboard or ingestion
+  correctness)
+- **Area:** Live end-to-end run (2026-09-23): "run the complete
+  application using real sources" — full pipeline trace, source registry
+  → fetch → article → LLM → event → SQLite → API → frontend
+- **Status:** `CONFIRMED`, `FIXED`
+- **Description:** `seed_sources.py::seed()` upserted by matching
+  `Source.url == url` alone. Several curated URLs in `SOURCES` had been
+  corrected since the registry was first seeded (e.g. OpenAI Blog:
+  `openai.com/blog/rss.xml` → `openai.com/news/rss.xml`; same for Google
+  DeepMind Blog and Wired AI). Re-running the seed script — the
+  documented, intended way to pick up such corrections — matched nothing
+  for the new URL, so it **inserted a second row** with the same name
+  instead of updating the existing one. The old row, now pointing at a
+  dead URL, was left behind permanently. Reproduced directly: re-seeding
+  live produced exactly three duplicate-named rows ("OpenAI Blog" x2,
+  "Google DeepMind Blog" x2, "Wired AI" x2), visibly confirmed on the
+  real `/admin/sources` page — one healthy row and one
+  failing/"Never fetched" row per name, with no way to tell from the UI
+  which was authoritative. This contradicts the script's own documented
+  contract ("This is idempotent: running it multiple times will not
+  create duplicate sources").
+- **Fix (`backend/seed_sources.py`):** match by `(organization_id, name)`
+  first — the stable identity of a curated entry — falling back to URL
+  match for a hypothetical rename; on a match, update `url` (and other
+  metadata) in place instead of leaving it untouched. Verified live:
+  re-running `seed_sources.py` a second time after the fix reported
+  `Inserted: 0, Updated: 22` with zero duplicate names, and the admin
+  page correctly showed one row per source.
+- **Data cleanup (one-time, not a schema change):** the three
+  already-orphaned duplicate rows from before this fix held zero
+  articles and zero events (confirmed directly by query before deleting
+  — deleting them could not have orphaned any historical data); deleted,
+  and the three surviving historical rows (100+, 101, and 10 articles
+  respectively) had their `url` corrected to match the current curated
+  value so future ingestion cycles use the live, working URL.
+- **Regression tests (`backend/tests/test_seed_sources.py`, new file):**
+  `test_reseeding_after_a_url_correction_updates_in_place_not_duplicates`
+  (direct reproduction against the real `seed()` function) and
+  `test_seed_is_idempotent_across_two_runs`.
+
 ### ARTICLE-BODY-FETCH-01 — Decompression-bomb protection confirmed inherited through the real article_body.py entrypoint (not assumed)
 - **Severity:** N/A (verification, not a defect)
 - **Area:** Phase 1B, second attack pass, Area D (article_body

@@ -7,7 +7,10 @@ Usage (from the backend/ directory, with venv active):
     python seed_sources.py
 
 This is idempotent: running it multiple times will not create duplicate sources.
-Sources are matched by URL — existing sources are updated, new ones are inserted.
+Sources are matched by (organization, name) — the stable identity of a curated
+entry — falling back to URL for the (rare) case of a genuine rename. Existing
+sources are updated in place, including their URL, so correcting a stale feed
+URL never orphans the old row as a duplicate.
 """
 import sys
 import os
@@ -78,16 +81,30 @@ def seed(db: Session) -> None:
             org_cache[org_name] = org
 
     for org_name, source_name, url, tier, polling_tier in SOURCES:
-        existing = db.query(Source).filter(Source.url == url).first()
+        org = org_cache[org_name]
+        # Match by (organization, name) first — the stable identity of a
+        # curated source — falling back to URL. Matching by URL alone (the
+        # prior behavior) breaks idempotency whenever a source's URL is
+        # corrected (e.g. after a redirect/404 is discovered): the old row
+        # is orphaned rather than updated, leaving a permanent duplicate
+        # "OpenAI Blog"/"Google DeepMind Blog"/etc. entry on the admin
+        # sources page. Confirmed live: re-seeding after several URLs were
+        # refined produced exactly this duplication.
+        existing = (
+            db.query(Source)
+            .filter(Source.organization_id == org.id, Source.name == source_name)
+            .first()
+            or db.query(Source).filter(Source.url == url).first()
+        )
         if existing:
             # Update metadata if it changed
             existing.name = source_name
+            existing.url = url
             existing.tier = tier
             existing.polling_tier = polling_tier
             existing.enabled = True
             updated += 1
         else:
-            org = org_cache[org_name]
             source = Source(
                 id=uuid.uuid4(),
                 name=source_name,

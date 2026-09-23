@@ -834,3 +834,102 @@ test input — direct confirmation this is inherent non-determinism in
 grading a live model's compliance with a prompt injection (no
 seed/temperature=0 guarantee on that call), not a regression introduced
 by anything in Areas A–E. Not modified: out of scope for this pass.
+
+### Session 6: Live end-to-end run against real sources (2026-09-23)
+
+Request: run the complete application with real sources, trace the whole
+pipeline end to end, and demonstrate the dashboard shows useful, current
+AI developments. No architecture changes; fix only concrete issues found.
+
+**Environment fix (not a code defect):** port 8000 is in Windows'
+OS-excluded port range on this machine and could not be bound. Changed
+`.claude/launch.json`'s backend port to 8001 and added
+`frontend/.env.local` (gitignored) with
+`NEXT_PUBLIC_API_BASE_URL=http://localhost:8001` so the frontend's
+existing `API_BASE_URL` fallback logic (`lib/api.ts`) points at the
+right place. Purely local dev-environment wiring, not an architecture
+change.
+
+**Live ingestion run:** re-seeded the source registry
+(`seed_sources.py`, idempotent by design) — 22 curated sources, 11
+genuinely reachable today (probed live via `validate_source_registry.py`
+before spending any LLM calls; the other 11 are stale URLs on the
+content-curation side — 404/403/400/429, not a pipeline defect). Ran one
+real ingestion cycle via `IngestionScheduler().run_ingestion_cycle()`
+directly against the real `ai_platform.db`. First attempt used the
+persisted `LLM_PROVIDER=nvidia` config and stalled with zero new rows
+committed after several minutes — consistent with this project's
+already-documented NVIDIA latency characteristic, not a new finding.
+Killed it (DB-ISOLATION-01's own verification from the prior session
+held: no partial/uncommitted state leaked from the kill). Re-ran with
+`LLM_PROVIDER=openai` as a one-off environment override for this single
+script invocation only (persisted config untouched) — OpenAI is this
+project's already-established live-validation provider. Completed in
+3128s (~52 min): 654 new articles, 653 new events, newest `event_time`
+literally the morning of the run (2026-09-23).
+
+**Verified end to end, with real data:** started the real backend
+(`llm_mode=production llm_provider=nvidia`, scheduler auto-started) and
+real frontend against this real database. `/api/v1/events/` returns
+well-formed real events (real headlines, factual summaries, verified
+citations, entities, importance scores). The actual dashboard at
+`localhost:3000` rendered 40 current developments correctly — "UPDATED
+23 SEP · 03:49 UTC" matching the real ingestion timestamp — including
+substantive, current AI news (GPT-6 prompt caching, a chip capable of
+running a 30B MoE model locally, a scam-platform disruption, open-weight
+model leaderboard shifts). Clicked into an event detail page: full
+evidence panel, entities, verified quotes, and official-source link all
+rendered correctly. No console errors, no broken network requests.
+
+**Concrete issue found and fixed: `SOURCE-REGISTRY-DUP-01`.**
+Re-seeding after several curated URLs had been corrected (OpenAI Blog,
+Google DeepMind Blog, Wired AI) produced duplicate-named source rows,
+visibly confirmed on the real `/admin/sources` page — because `seed()`
+matched only by URL, a corrected URL orphaned the old row instead of
+updating it, contradicting the script's own documented idempotency
+contract. Fixed by matching on `(organization, name)` first; verified
+live (re-seeding after the fix: `Inserted: 0, Updated: 22`, zero
+duplicates) and cleaned up the three already-orphaned rows (confirmed
+zero articles/events referenced them before deleting — no historical
+data at risk). 2 new regression tests in
+`backend/tests/test_seed_sources.py`. Full details in
+`docs/RED_TEAM_REPORT.md` (`SOURCE-REGISTRY-DUP-01`).
+
+**Investigated, not fixed — genuinely out of scope:**
+- One stored headline ("Crusoe Raises .9 Billion...") is missing a `$3`
+  digit the LLM dropped while generating its own headline text from a
+  real `$3.9B` source figure. Searched all 778 events for the same
+  pattern (`re.search` for a bare `.N Billion/Million` with no leading
+  digit/`$`) — exactly 1 match. An isolated LLM-hallucination artifact
+  from the original (5-day-old) test cycle, not from today's fresh
+  batch, and not a systemic/deterministic pipeline defect. Building a
+  headline-validator for one historical row would be the kind of
+  speculative feature this task explicitly said not to add.
+- A Waymo "transit rewards" promo item (via Hacker News) scored
+  `importance_score=70` and appeared on the dashboard. Read
+  `CLASSIFY_SYSTEM_PROMPT`: it deliberately scopes to "real-world
+  AI-ecosystem events," not "AI models/research only" — autonomous
+  vehicles are a defensible read of that scope, and this is the LLM's
+  judgment call within an intentionally broad prompt, not a deterministic
+  bug. Tuning it would be prompt/behavior engineering, not a concrete
+  pipeline fix.
+- One image URL (of 607) contains a narrow no-break space (` `,
+  not a plain ASCII space) baked into AWS's own CDN filename
+  (`...4.17 PM.png`) — the origin server's own naming, not
+  something this pipeline introduced; modern browsers tolerate it in an
+  `<img src>`. Not touched.
+
+**Test suite after the `seed_sources.py` fix:** 420 passed, 24 skipped,
+2 failed
+(`test_prompt_injection_semantic.py::test_semantic_prompt_injection_importance`,
+`::test_semantic_prompt_injection_json_ld`) — a *third*, different pair
+of live-NVIDIA-dependent failures in the same file, on top of the
+already-documented `fabricate_evidence` flakiness from the prior
+session. All three tests in this file call the real `NVIDIAProvider`
+directly and assert the live model resists a prompt injection each run —
+inherently non-deterministic by the test's own design (no
+seed/temperature=0 control), and unrelated to `seed_sources.py`/
+`launch.json` (this session's only code changes). Three runs, three
+different specific sub-tests failing, is itself strong evidence for
+"inherent live-model flakiness," not a regression. Not modified: fixing
+live-test non-determinism was not part of this task's scope.
