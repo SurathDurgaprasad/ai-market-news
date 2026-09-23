@@ -65,6 +65,41 @@ def test_a_separate_investigation_stays_different():
     ) == EventRelationship.DIFFERENT_EVENT
 
 
+def test_a_swapped_subject_on_one_template_stays_different():
+    assert _rel(
+        "Baseten becomes supported inference provider on Hugging Face",
+        "DeepInfra becomes supported inference provider on Hugging Face",
+    ) == EventRelationship.DIFFERENT_EVENT
+
+
+def test_same_model_used_for_different_work_stays_different():
+    assert _rel(
+        "GPT-6 Astra enhances data visualization for Hex",
+        "GPT-6 Astra enhances software testing capabilities",
+    ) == EventRelationship.DIFFERENT_EVENT
+
+
+def test_separate_research_findings_about_one_tool_stay_different():
+    assert _rel(
+        "Clare Bryant utilizes Co-Scientist for genetic research",
+        "Filippo Menolascina utilizes Co-Scientist for liver disease research",
+    ) == EventRelationship.DIFFERENT_EVENT
+
+
+def test_a_launch_and_a_migration_of_the_same_platform_stay_different():
+    assert _rel(
+        "Amazon Bedrock AgentCore launches an enhanced runtime for agents",
+        "Clinic migrates agents to the Amazon Bedrock AgentCore runtime",
+    ) == EventRelationship.DIFFERENT_EVENT
+
+
+def test_same_organization_with_different_launches_stays_different():
+    assert _rel(
+        "OpenAI launches an ultrafast API tier for GPT-5.6 Sol",
+        "OpenAI launches GPT-5.6 Cyber for cybersecurity work",
+    ) == EventRelationship.DIFFERENT_EVENT
+
+
 def test_marker_conflict_and_contrasting_claims_stay_different():
     assert _rel("H200 production expands", "B200 production expands") == EventRelationship.DIFFERENT_EVENT
     assert _rel("H200 production on track", "H200 production behind") == EventRelationship.DIFFERENT_EVENT

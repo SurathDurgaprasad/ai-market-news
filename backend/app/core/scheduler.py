@@ -254,6 +254,17 @@ class IngestionScheduler:
                 finally:
                     db.close()
 
+            db = SessionLocal()
+            try:
+                from app.core.consolidate import consolidate_safe_duplicates
+                merged = consolidate_safe_duplicates(db)
+                if merged:
+                    logger.info("Consolidated %s duplicate developments into canonical events", merged)
+            except Exception as consolidate_err:
+                logger.error("Canonical consolidation failed: %s", consolidate_err)
+                db.rollback()
+            finally:
+                db.close()
         except Exception as e:
             logger.error(f"Error during ingestion cycle: {e}")
         logger.info("Ingestion cycle complete.")

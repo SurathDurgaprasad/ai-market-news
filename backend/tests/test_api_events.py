@@ -700,3 +700,57 @@ def test_week_scope_keeps_current_week_and_drops_older_and_offtopic():
     everything = [item["headline"] for item in client.get("/api/v1/events/?limit=20").json()]
     assert "OpenAI releases an older model" in everything
     assert "People Turn to Cigarettes to Quit Vaping" in everything
+
+
+def test_same_development_counts_once_in_the_week_feed_and_keeps_evidence():
+    """N articles about one development are one feed card, with every article still attached."""
+    from app.core.consolidate import consolidate_safe_duplicates
+
+    db = _TestingSessionLocal()
+    source = _make_source(db, name="Metro Desk", url="https://metro.example/feed")
+    source.tier = "secondary"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    headlines = [
+        "Investigation reveals deaths near US-Mexico border surveillance towers",
+        "Investigation reveals failures in US-Mexico border surveillance technology",
+        "Surveillance technology fails to prevent migrant deaths at the U.S.-Mexico border",
+        "New AI surveillance towers fail to prevent migrant deaths",
+    ]
+    urls = []
+    for index, headline in enumerate(headlines):
+        event = _make_event(
+            db,
+            source,
+            headline=headline,
+            short_summary="An investigation of AI surveillance along the border.",
+            importance_score=70 + index,
+            event_time=now,
+            article_url=f"https://metro.example/border-{index}",
+            importance_reasoning={"event_kind": "research"},
+        )
+        article = Article(
+            id=uuid.uuid4(),
+            source_id=source.id,
+            url=f"https://metro.example/border-{index}",
+            title=headline,
+            raw_content="Border surveillance investigation.",
+            hash=f"border-{index}",
+            published_at=now,
+        )
+        db.add(article)
+        db.flush()
+        db.add(EventArticle(event_id=event.id, article_id=article.id, link_type="primary"))
+        urls.append(article.url)
+    db.commit()
+
+    consolidate_safe_duplicates(db)
+    db.close()
+
+    listed = client.get("/api/v1/events/?scope=week&limit=50")
+    assert listed.status_code == 200
+    body = listed.json()
+    assert len(body) == 1
+    detail = client.get(f"/api/v1/events/{body[0]['id']}")
+    assert detail.status_code == 200
+    found = {item["url"] for item in detail.json()["linked_articles"]}
+    assert found == set(urls)

@@ -334,6 +334,78 @@ def _content_ngrams(words: list[str], size: int) -> set[str]:
     return {" ".join(words[index : index + size]) for index in range(len(words) - size + 1)}
 
 
+_ANNOUNCEMENT_ACT = re.compile(
+    r"\b(launches|launch of|releases|release of|introduces|introduction of|unveils)\b",
+    re.IGNORECASE,
+)
+_DEPLOYMENT_ACT = re.compile(
+    r"\b(migration|migrates|implements|implementation|deploys|deployed|integrates)\b",
+    re.IGNORECASE,
+)
+_TEMPLATE_VERBS = {
+    "utilizes", "utilize", "enhances", "enhance", "launches", "launch",
+    "introduces", "introduce", "becomes", "become", "achieves", "achieve",
+    "integrates", "integrate", "implements", "implement", "releases",
+    "announces", "announce", "develops", "develop", "offers", "offer",
+    "updates", "update",
+}
+_GENERIC_OVERLAP = {
+    "research", "features", "feature", "model", "models", "data",
+    "system", "systems", "platform", "update", "updates", "release",
+}
+
+
+def _specific_shared_story(title1: str, title2: str) -> bool:
+    """
+    True when two headlines share one incident phrase, not a product template.
+
+    A swapped name on an otherwise identical headline stays apart. A shared
+    model number, or a verb such as 'launches' or 'utilizes', is not the event.
+    """
+    announced = bool(_ANNOUNCEMENT_ACT.search(title1 or ""))
+    deployed = bool(_DEPLOYMENT_ACT.search(title1 or ""))
+    other_announced = bool(_ANNOUNCEMENT_ACT.search(title2 or ""))
+    other_deployed = bool(_DEPLOYMENT_ACT.search(title2 or ""))
+    if (announced and not deployed and other_deployed and not other_announced) or (
+        other_announced and not other_deployed and deployed and not announced
+    ):
+        return False
+    words1 = _normalized_content_words(title1)
+    words2 = _normalized_content_words(title2)
+    shared = set(words1) & set(words2)
+    if len(shared) < 4:
+        return False
+    only_left = set(words1) - shared
+    only_right = set(words2) - shared
+    if (
+        len(only_left) == 1
+        and len(only_right) == 1
+        and words1
+        and words2
+        and words1[0] in only_left
+        and words2[0] in only_right
+    ):
+        return False
+    grams = (_content_ngrams(words1, 4) & _content_ngrams(words2, 4)) or (
+        _content_ngrams(words1, 3) & _content_ngrams(words2, 3)
+    )
+    usable = []
+    for gram in grams:
+        tokens = gram.split()
+        if any(token.isdigit() for token in tokens):
+            continue
+        if any(token in _TEMPLATE_VERBS for token in tokens):
+            continue
+        usable.append(tokens)
+    if not usable:
+        return False
+    covered = {token for tokens in usable for token in tokens}
+    return any(
+        token not in _GENERIC_OVERLAP and len(token) >= 5
+        for token in shared - covered
+    )
+
+
 def classify_headline_relationship(
     title1: str,
     title2: str,
@@ -385,12 +457,7 @@ def classify_headline_relationship(
     if split_kinds:
         return EventRelationship.DIFFERENT_EVENT
 
-    words1 = _normalized_content_words(title1)
-    words2 = _normalized_content_words(title2)
-    shared = set(words1) & set(words2)
-    if len(shared) >= 4 and _content_ngrams(words1, 4) & _content_ngrams(words2, 4):
-        return EventRelationship.SAME_EVENT
-    if len(shared) >= 4 and _content_ngrams(words1, 3) & _content_ngrams(words2, 3):
+    if _specific_shared_story(title1, title2):
         return EventRelationship.SAME_EVENT
     return EventRelationship.DIFFERENT_EVENT
 

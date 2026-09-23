@@ -6,34 +6,75 @@ not merge events the predicates reject (different products, contrasting claims).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.deduplication import (
+    classify_headline_relationship,
     coverage_of_same_named_release,
     named_product_keys,
     titles_are_safe_lexical_match,
     titles_are_same_outlet_paraphrase,
     titles_are_same_release_wording,
 )
+from app.core.providers.llm import EventRelationship
 from app.models.event import Event, EventArticle
 
 _TIER_RANK = {"primary": 0, "research": 1, "secondary": 2, "community": 3}
 
 
+def _event_kind(event: Event) -> str:
+    reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+    return str(reasoning.get("event_kind") or "")
+
+
+def _close_in_time(left: Event, right: Event) -> bool:
+    """Paraphrases of one story are published together, not months apart."""
+    left_time = left.event_time or left.created_at
+    right_time = right.event_time or right.created_at
+    if left_time is None or right_time is None:
+        return False
+    if left_time.tzinfo is None:
+        left_time = left_time.replace(tzinfo=timezone.utc)
+    if right_time.tzinfo is None:
+        right_time = right_time.replace(tzinfo=timezone.utc)
+    return abs(left_time - right_time) <= timedelta(hours=48)
+
+
 def _should_merge(left: Event, right: Event) -> bool:
-    a = left.headline or ""
-    b = right.headline or ""
-    if titles_are_safe_lexical_match(a, b) or titles_are_same_release_wording(a, b):
-        return True
-    if coverage_of_same_named_release(a, left.article_url, b, right.article_url):
+    """
+    One canonical card when the headlines are the same real-world development.
+
+    A later distribution stays a separate event. Same organization, product,
+    or topic is not enough.
+    """
+    relationship = classify_headline_relationship(
+        left.headline or "",
+        right.headline or "",
+        _event_kind(left),
+        _event_kind(right),
+    )
+    if relationship == EventRelationship.SAME_EVENT:
+        headline_a = left.headline or ""
+        headline_b = right.headline or ""
+        if titles_are_safe_lexical_match(headline_a, headline_b) or titles_are_same_release_wording(
+            headline_a, headline_b
+        ):
+            return True
+        return _close_in_time(left, right)
+    if coverage_of_same_named_release(
+        left.headline or "",
+        left.article_url,
+        right.headline or "",
+        right.article_url,
+    ):
         return True
     same_source = (
         left.primary_source_id is not None
         and left.primary_source_id == right.primary_source_id
     )
-    return bool(same_source and titles_are_same_outlet_paraphrase(a, b))
+    return bool(same_source and titles_are_same_outlet_paraphrase(left.headline or "", right.headline or ""))
 
 
 def _prefer(event: Event):

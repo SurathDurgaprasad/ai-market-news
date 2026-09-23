@@ -5,13 +5,19 @@ import logging
 
 from app.models.article import Article
 from app.models.event import Event
-from app.core.providers.llm import get_llm_provider, LlmUnavailableError, resolve_llm_mode
+from app.core.providers.llm import (
+    EventRelationship,
+    get_llm_provider,
+    LlmUnavailableError,
+    resolve_llm_mode,
+)
 from app.core.runtime import is_test_runtime
 from app.core.deduplication import (
     normalize_url,
     generate_content_hash,
     verify_citations,
     fallback_source_citations,
+    classify_headline_relationship,
     titles_are_safe_lexical_match,
     titles_are_same_outlet_paraphrase,
     titles_are_same_release_wording,
@@ -366,6 +372,40 @@ class IntelligencePipeline:
                     len(verified_citations),
                     getattr(self.llm, "_json_mode", None),
                 )
+
+        if not matched_event and summary is not None and getattr(summary, "headline", None):
+            from datetime import datetime, timedelta, timezone
+            window_start = datetime.now(timezone.utc) - timedelta(days=7)
+            incoming_kind = getattr(classification, "event_kind", None) or ""
+            recent_events = (
+                self.db.query(Event)
+                .filter(Event.superseded_by_id.is_(None), Event.created_at >= window_start)
+                .order_by(Event.created_at.desc())
+                .limit(80)
+                .all()
+            )
+            incoming_headline = summary.headline or title
+            for candidate in recent_events:
+                candidate_kind = ""
+                if isinstance(candidate.importance_reasoning, dict):
+                    candidate_kind = candidate.importance_reasoning.get("event_kind") or ""
+                relationship = classify_headline_relationship(
+                    incoming_headline,
+                    candidate.headline or "",
+                    incoming_kind,
+                    candidate_kind,
+                )
+                if relationship != EventRelationship.SAME_EVENT:
+                    continue
+                matched_event = self._live_event(candidate)
+                if matched_event:
+                    logger.info(
+                        "MERGE [same development] '%s' → event '%s' (id=%s)",
+                        incoming_headline[:80],
+                        matched_event.headline,
+                        matched_event.id,
+                    )
+                    break
 
         # We wrap the final persist in a retry loop because SQLite under high
         # concurrent ingestion may raise locks or flush errors.

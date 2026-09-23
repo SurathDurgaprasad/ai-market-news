@@ -213,3 +213,55 @@ def test_consolidate_merges_release_wording_and_keeps_higher_importance(db_sessi
     links = db_session.query(EventArticle).filter(EventArticle.event_id == live.id).all()
     assert len(links) == 1
     assert links[0].link_type == "supporting"
+
+
+def test_distribution_and_unrelated_launches_stay_separate_cards(db_session):
+    source = db_session.query(Source).first()
+    now = datetime.now(timezone.utc)
+    rows = [
+        ("Introduction of Northwind 4.2 for general reasoning", "model_release"),
+        ("Northwind 4.2 for general reasoning now available on a cloud", "model_release"),
+        ("Harbor introduces a reasoning model", "model_release"),
+        ("Harbor raises a funding round for its lab", "funding"),
+        ("Lab publishes a paper about harbor retrieval", "research"),
+        ("Lab releases the harbor retrieval model", "model_release"),
+        ("OpenAI launches an operations model", "model_release"),
+        ("OpenAI publishes a safety framework", "research"),
+    ]
+    for headline, kind in rows:
+        db_session.add(Event(
+            id=uuid.uuid4(),
+            headline=headline,
+            short_summary=headline,
+            importance_score=70,
+            primary_source_id=source.id,
+            article_url=f"https://example.com/{uuid.uuid4().hex}",
+            event_time=now,
+            importance_reasoning={"event_kind": kind},
+        ))
+    db_session.commit()
+    assert consolidate_safe_duplicates(db_session) == 0
+    live = db_session.query(Event).filter(Event.superseded_by_id.is_(None)).count()
+    assert live == len(rows)
+
+
+def test_same_story_a_year_apart_stays_two_cards(db_session):
+    source = db_session.query(Source).first()
+    now = datetime.now(timezone.utc)
+    headlines = [
+        "Investigation reveals deaths near US-Mexico border surveillance towers",
+        "Investigation reveals failures in US-Mexico border surveillance technology",
+    ]
+    for index, headline in enumerate(headlines):
+        db_session.add(Event(
+            id=uuid.uuid4(),
+            headline=headline,
+            short_summary=headline,
+            importance_score=70,
+            primary_source_id=source.id,
+            article_url=f"https://example.com/year-{index}",
+            event_time=now - timedelta(days=400 * index),
+            importance_reasoning={"event_kind": "research"},
+        ))
+    db_session.commit()
+    assert consolidate_safe_duplicates(db_session) == 0
