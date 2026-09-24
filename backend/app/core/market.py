@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -35,6 +36,21 @@ _CATEGORY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 _HEADLINE_SECURITY = re.compile(r"\b(malware|ransomware|vulnerability|cyberattack)\b", re.I)
+# A stored security_incident kind must be backed by security language in the
+# headline or summary. A policy declaration or a hype critique is not an
+# incident just because the classifier chose that kind.
+_SECURITY_TERMS = re.compile(
+    r"\b(secur\w*|vulnerab\w*|breach\w*|attack\w*|malware|ransomware|exploit\w*|"
+    r"hack\w*|leak\w*|jailbreak\w*|fraud\w*|phishing|scam\w*|cyber\w*|cve-\d+|"
+    r"compromis\w*|backdoor\w*|spyware|intrusion\w*|stolen|theft)\b",
+    re.I,
+)
+_HEADLINE_POLICY = re.compile(
+    r"\b(regulat\w*|legislat\w*|laws?|policy|policies|oversight|governance|"
+    r"executive order|antitrust|lawsuits?|sues|sued|court|ruling|senate|congress|"
+    r"parliament|standards)\b",
+    re.I,
+)
 _HEADLINE_MODEL = re.compile(r"\b(large language model|foundation model|llm|gpt-\d)\b", re.I)
 _HEADLINE_RESEARCH = re.compile(r"\bresearch\b", re.I)
 _HEADLINE_ASSISTANT = re.compile(r"\b(ai assistant|ai bots?|chatbots?)\b", re.I)
@@ -66,6 +82,7 @@ _CATEGORY_SUBSTANCE = {
     "Agents": 2,
     "Multimodal": 2,
     "Coding": 2,
+    "Policy": 2,
     "Funding": 1,
     "Partnerships": 1,
 }
@@ -75,6 +92,15 @@ _HEADLINE_CODING = re.compile(r"\bide\b", re.I)
 _ROUNDUP = re.compile(r"\b(roundup|companies lead|survey of)\b", re.I)
 _CUSTOMER_DEPLOYMENT = re.compile(
     r"\b(implements|implementation of|now operates on|launches\b.{0,80}\bsolution)\b",
+    re.I,
+)
+# "Retailer automates X using Amazon Bedrock": a customer story on a
+# vendor blog. The vendor naming itself as the subject is not matched.
+_CUSTOMER_ON_PLATFORM = re.compile(
+    r"^(?!\s*(?:amazon|aws|microsoft|azure|google)\b).*"
+    r"\b(automates?|enhances?|improves?|streamlines?|transforms?|modernizes?|"
+    r"accelerates?|scales?|builds?|powers?|reduces?|optimizes?)\b"
+    r".{0,80}\b(?:using|with|on|via)\s+(?:amazon|aws|azure|google cloud|vertex ai)\b",
     re.I,
 )
 
@@ -122,6 +148,10 @@ class MarketEvent:
     source_tiers: list[str] = field(default_factory=list)
     organization_name: str = ""
     primary_source_name: str = ""
+    primary_source_tier: str = ""
+    # Publisher readers should see: the validated originating publisher
+    # behind an aggregator link, otherwise the ingest source.
+    display_source_name: str = ""
 
 
 def _utc(moment: datetime) -> datetime:
@@ -151,11 +181,17 @@ def market_category(event: MarketEvent) -> Optional[str]:
     """
     kind = (event.event_kind or "other").strip().lower()
     headline = event.headline or ""
-    if kind == "security_incident" or _HEADLINE_SECURITY.search(headline):
+    if _HEADLINE_SECURITY.search(headline):
         return "Security"
+    if kind == "security_incident":
+        if _SECURITY_TERMS.search(headline) or _SECURITY_TERMS.search(event.summary or ""):
+            return "Security"
+        kind = "other"
     mapped = _KIND_CATEGORY.get(kind)
     if mapped:
         return mapped
+    if _HEADLINE_POLICY.search(headline):
+        return "Policy"
     for label, pattern in _CATEGORY_RULES:
         if pattern.search(headline):
             return label
@@ -241,7 +277,7 @@ def source_availability(event: MarketEvent) -> str:
     if tier == "research":
         return "Research"
     if tier == "secondary":
-        return "Supporting coverage"
+        return "News coverage"
     if tier == "community":
         return "Discussion"
     return ""
@@ -299,7 +335,11 @@ def _display_organization(event: MarketEvent) -> str:
         cleaned = entity.strip()
         if cleaned:
             return cleaned
-    return event.organization_name or event.primary_source_name or ""
+    # A news outlet or aggregator is who reported it, not who did it.
+    # Only a curated primary or research publisher is its own subject.
+    if (event.primary_source_tier or "").strip().lower() in {"primary", "research"}:
+        return event.organization_name or event.primary_source_name or ""
+    return ""
 
 
 def _card(event: MarketEvent) -> dict:
@@ -316,6 +356,7 @@ def _card(event: MarketEvent) -> dict:
         "importance_label": importance_label(event.importance),
         "source_count": sources,
         "source_label": source_availability(event),
+        "source_name": event.display_source_name or event.primary_source_name,
     }
 
 
@@ -347,7 +388,8 @@ def is_discussion(event: MarketEvent) -> bool:
 
 
 def _is_customer_deployment(event: MarketEvent) -> bool:
-    return bool(_CUSTOMER_DEPLOYMENT.search(event.headline or ""))
+    headline = event.headline or ""
+    return bool(_CUSTOMER_DEPLOYMENT.search(headline) or _CUSTOMER_ON_PLATFORM.search(headline))
 
 
 def _source_count(event: MarketEvent) -> int:
@@ -396,13 +438,24 @@ def _quality_key(event: MarketEvent, moment: datetime) -> tuple:
     )
 
 
+@lru_cache(maxsize=100_000)
+def _headline_relationship(left: str, right: str, left_kind: str, right_kind: str) -> str:
+    """
+    Memoized headline relationship. The classifier is a pure function of
+    these four strings, and one overview build compares the same pairs
+    several times (the week, then each subset). Stored headlines rarely
+    change, so later requests reuse earlier results as well.
+    """
+    return classify_headline_relationship(left, right, left_kind, right_kind)
+
+
 def _same_reader_development(left: MarketEvent, right: MarketEvent) -> bool:
     """One underlying development, including a later distribution of a release."""
-    relationship = classify_headline_relationship(
-        left.headline,
-        right.headline,
-        left.event_kind,
-        right.event_kind,
+    relationship = _headline_relationship(
+        left.headline or "",
+        right.headline or "",
+        left.event_kind or "",
+        right.event_kind or "",
     )
     return relationship in {
         EventRelationship.SAME_EVENT,

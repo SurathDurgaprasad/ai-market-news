@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.deduplication import (
@@ -22,6 +23,11 @@ from app.core.providers.llm import EventRelationship
 from app.models.event import Event, EventArticle
 
 _TIER_RANK = {"primary": 0, "research": 1, "secondary": 2, "community": 3}
+
+# Pairwise comparison is quadratic, so only recent events are compared.
+# Coverage of one development is published within days, not weeks; older
+# canonical events are already settled and are not re-examined every cycle.
+CONSOLIDATION_WINDOW = timedelta(days=14)
 
 
 def _event_kind(event: Event) -> str:
@@ -124,16 +130,22 @@ def _move_articles(db: Session, duplicate: Event, canonical: Event) -> None:
         )
 
 
-def consolidate_safe_duplicates(db: Session) -> int:
+def consolidate_safe_duplicates(db: Session, now: datetime | None = None) -> int:
     """
     Merge live events that the lexical predicates already treat as one story.
 
+    Only events inside CONSOLIDATION_WINDOW are compared.
     Returns the number of duplicate events superseded.
     """
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    cutoff = (moment - CONSOLIDATION_WINDOW).astimezone(timezone.utc).replace(tzinfo=None)
     events = (
         db.query(Event)
         .options(joinedload(Event.primary_source))
         .filter(Event.superseded_by_id.is_(None))
+        .filter(func.coalesce(Event.event_time, Event.created_at) >= cutoff)
         .all()
     )
     parent = {event.id: event.id for event in events}

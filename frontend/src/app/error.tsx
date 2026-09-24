@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import Link from 'next/link';
 
 export default function Error({
   error,
@@ -10,23 +11,29 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error('Next.js Global Error Caught:', error);
+    console.error('Unhandled error while rendering this view:', error);
   }, [error]);
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-canvas text-ink">
-      <div className="rounded-lg border border-danger/40 bg-danger/10 p-8 text-center">
-        <h2 className="mb-4 text-2xl font-bold text-danger">Something went wrong!</h2>
-        <p className="mb-6 text-secondary">
-          The intelligence platform encountered an error loading this view.
+    <main className="flex flex-1 items-center justify-center bg-canvas px-4 py-16 text-ink">
+      <div className="max-w-md rounded-md border border-line bg-surface p-8 text-center" role="alert">
+        <h1 className="mb-2 text-xl font-semibold text-ink">This view could not be loaded</h1>
+        <p className="mb-6 text-sm text-muted">
+          The intelligence API may be restarting. Your data is unaffected.
         </p>
-        <button
-          onClick={() => reset()}
-          className="rounded-md bg-danger-fill px-6 py-2 font-medium text-ink transition-colors hover:bg-danger-fill/80"
-        >
-          Try again
-        </button>
+        <div className="flex items-center justify-center gap-5">
+          <button
+            type="button"
+            onClick={() => reset()}
+            className="rounded-md border border-line bg-elevated px-4 py-2 text-sm font-medium text-ink transition-colors hover:border-accent"
+          >
+            Try again
+          </button>
+          <Link href="/" className="text-sm text-accent hover:underline">
+            Back to overview
+          </Link>
+        </div>
       </div>
-    </div>
+    </main>
   );
 }

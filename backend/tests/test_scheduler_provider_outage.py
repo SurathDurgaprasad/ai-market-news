@@ -142,3 +142,54 @@ def test_provider_outage_does_not_retry_every_remaining_article(db_session):
         f"Provider was called {captured[0].llm.calls} times for 10 articles from an already-confirmed-down "
         f"source — outage detection should stop processing the rest of this source's articles, not retry each one."
     )
+
+
+def test_provider_outage_defers_the_remaining_sources_in_the_cycle(db_session):
+    """
+    One confirmed outage must not cost every later source its own full
+    provider deadline. The rest of the cycle is deferred, and deferred
+    sources are not marked failing or fetched.
+    """
+    from app.core.parser import ArticleData
+
+    first = Source(name="Outage A", url="https://a.example.com/rss", enabled=True, type="rss")
+    second = Source(name="Outage B", url="https://b.example.com/rss", enabled=True, type="rss")
+    db_session.add_all([first, second])
+    db_session.commit()
+    ids = (first.id, second.id)
+    db_session.close = MagicMock()
+    providers = []
+
+    from app.core.pipeline import IntelligencePipeline
+
+    class Capture(IntelligencePipeline):
+        def __init__(self, db, llm_env=None):
+            super().__init__(db, llm_env="test")
+            self.llm = _OutageLLMProvider()
+            providers.append(self.llm)
+
+    articles = [
+        ArticleData(
+            title="Article",
+            url="https://a.example.com/post",
+            content="This article has enough characters to pass the minimum length validation check in the pipeline.",
+        )
+    ]
+    scheduler = IngestionScheduler()
+    with patch("app.core.scheduler.SessionLocal", return_value=db_session):
+        with patch("app.core.fetcher.fetch_url") as mock_fetch:
+            resp = MagicMock()
+            resp.text = "<rss></rss>"
+            mock_fetch.return_value = resp
+            with patch("app.core.parser.parse_rss_feed", return_value=articles):
+                with patch("app.core.pipeline.IntelligencePipeline", Capture):
+                    scheduler.run_ingestion_cycle()
+
+    assert mock_fetch.call_count == 1
+    assert sum(provider.calls for provider in providers) == 1
+    db_session.expire_all()
+    statuses = {
+        row.id: row.health_status
+        for row in db_session.query(Source).filter(Source.id.in_(ids)).all()
+    }
+    assert set(statuses.values()) == {"degraded"}

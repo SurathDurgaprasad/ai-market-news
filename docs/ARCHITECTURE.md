@@ -134,7 +134,18 @@ vector-search code path exists but isn't used.
   from real page evidence (`og:site_name` meta tag or JSON-LD
   `publisher.name`) — never invented from the domain string. The API
   response (`EventResponse`) exposes `ingest_source` and
-  `official_source` as distinct fields.
+  `official_source` as distinct fields. `official_source.tier` is
+  `primary` only when the origin's host matches a registered primary
+  source, `research` for a preprint archive, and otherwise `origin`: the
+  original article, not an official statement. The aggregator's own tier
+  never describes the origin.
+- **Merged duplicates**: a superseded row stays addressable by id. The
+  detail response carries `canonical_id` (the live end of the
+  `superseded_by_id` chain) and the frontend redirects there, so an old
+  link never shows an event whose evidence has moved.
+- **Freshness**: `GET /events/overview` includes `ingestion`
+  (`llm_available`, `last_ingested_at`, enabled/failing source counts).
+  The homepage shows "Live" only when ingestion is current.
 - **Source tiers**: `PRIMARY` / `SECONDARY` / `COMMUNITY`, stored per
   `Source` row (`backend/app/models/source.py`).
 

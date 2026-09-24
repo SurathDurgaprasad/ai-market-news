@@ -36,6 +36,18 @@ LLM_UNAVAILABLE`), the entire cycle returns early with
 `{"blocked": "llm_unavailable", ...}` before touching any source — the
 system does not partially ingest with a broken/absent LLM.
 
+If the provider fails *during* a cycle (timeouts, outage), that source is
+marked `degraded` and the remaining due sources are deferred to the next
+cycle: they are not fetched, their failure counters are untouched, and
+they are marked `degraded` with "LLM unavailable; ingestion deferred" so
+the admin view does not show them as healthy. Without this, every later
+source would wait out the provider's full deadline in turn.
+
+After the sources, `consolidate_safe_duplicates` merges live events the
+headline predicates treat as one development. It compares only events
+from the last 14 days (`CONSOLIDATION_WINDOW`), because pairwise
+comparison is quadratic and older canonical events are already settled.
+
 ## Fetch — `CURRENT`
 
 `backend/app/core/fetcher.py::fetch_url`. SSRF-hardened (see

@@ -1,28 +1,32 @@
+function Bar({ className }: { className: string }) {
+  return <div className={`animate-pulse rounded bg-elevated ${className}`} />;
+}
+
 export default function Loading() {
   return (
-    <main className="min-h-screen bg-canvas text-ink">
-      <div className="intel-shell py-10">
-        <header className="mb-10 border-b border-line pb-8">
-          <div className="h-10 w-80 max-w-full animate-pulse rounded bg-elevated" />
-          <div className="mt-4 h-3 w-40 animate-pulse rounded bg-elevated" />
-          <div className="mt-3 h-4 w-56 animate-pulse rounded bg-surface" />
-        </header>
-        <div className="mb-7 h-4 w-48 animate-pulse rounded bg-elevated" />
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, idx) => (
-            <div
-              key={idx}
-              className="overflow-hidden rounded-lg border border-line bg-surface"
-            >
-              <div className="aspect-[16/10] max-h-36 w-full animate-pulse bg-elevated" />
-              <div className="space-y-3 p-5">
-                <div className="h-3 w-20 animate-pulse rounded bg-elevated" />
-                <div className="h-5 w-full animate-pulse rounded bg-elevated" />
-                <div className="h-5 w-2/3 animate-pulse rounded bg-elevated" />
-                <div className="h-4 w-full animate-pulse rounded bg-surface" />
+    <main className="flex-1 bg-canvas text-ink" aria-busy="true" aria-label="Loading overview">
+      <div className="intel-shell py-6 lg:py-8">
+        <div className="mb-8 border-b border-line pb-5">
+          <Bar className="h-7 w-72 max-w-full" />
+          <Bar className="mt-2 h-3 w-96 max-w-full" />
+        </div>
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)] xl:gap-14">
+          <div className="space-y-4">
+            <Bar className="h-4 w-48" />
+            {Array.from({ length: 4 }).map((_, idx) => (
+              <div key={idx} className="space-y-2 border-b border-line pb-4">
+                <Bar className="h-3 w-40" />
+                <Bar className="h-5 w-full" />
+                <Bar className="h-4 w-2/3" />
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+          <div className="space-y-3">
+            <Bar className="h-4 w-32" />
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <Bar key={idx} className="h-8 w-full" />
+            ))}
+          </div>
         </div>
       </div>
     </main>

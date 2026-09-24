@@ -300,7 +300,7 @@ def test_research_kind_does_not_invent_a_research_source():
         tiers=["secondary"],
         source_name="Example Review",
     )
-    assert source_availability(event) == "Supporting coverage"
+    assert source_availability(event) == "News coverage"
 
 
 def test_repeated_coverage_occupies_one_now_slot():

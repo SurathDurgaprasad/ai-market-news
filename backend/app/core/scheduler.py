@@ -143,7 +143,15 @@ class IngestionScheduler:
             finally:
                 db_master.close()
 
+            # Circuit breaker: once the provider is confirmed down in this
+            # cycle, the remaining sources are left due for the next cycle
+            # instead of each waiting out the provider's full deadline.
+            provider_down = False
+            deferred: list = []
             for source_id, s_name, s_url, s_type in source_targets:
+                if provider_down:
+                    deferred.append(source_id)
+                    continue
                 db = SessionLocal()
                 try:
                     source = db.query(Source).filter(Source.id == source_id).first()
@@ -229,6 +237,7 @@ class IngestionScheduler:
                         if source:
                             source.last_ingest_summary = summary[:500]
                             if llm_blocked:
+                                provider_down = True
                                 source.health_status = "degraded"
                                 source.last_error_info = "LLM unavailable; ingestion blocked"
                                 source.last_failure_at = func.now()
@@ -251,6 +260,24 @@ class IngestionScheduler:
                             db.commit()
                 except Exception as inner_err:
                     logger.error(f"Critical error handling source {s_name}: {inner_err}")
+                finally:
+                    db.close()
+            if deferred:
+                logger.warning(
+                    "LLM provider unavailable; deferred %s remaining source(s) to the next cycle",
+                    len(deferred),
+                )
+                # Not fetched and not failing, but also not healthy: the
+                # admin view must show that these were not ingested.
+                db = SessionLocal()
+                try:
+                    for source in db.query(Source).filter(Source.id.in_(deferred)).all():
+                        source.health_status = "degraded"
+                        source.last_error_info = "LLM unavailable; ingestion deferred"
+                    db.commit()
+                except Exception as defer_err:
+                    logger.error("Could not record deferred sources: %s", defer_err)
+                    db.rollback()
                 finally:
                     db.close()
 

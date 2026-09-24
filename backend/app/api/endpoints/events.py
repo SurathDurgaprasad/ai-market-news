@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Any, Literal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid as uuid_module
 from pydantic import BaseModel, ConfigDict, field_serializer
 from app.db.session import get_db
@@ -13,7 +13,15 @@ from app.core.urls import sanitize_http_url
 from app.core.presentation import classify_image_role, present_citations
 from app.core.origin import evidence_tier_for_origin, host_of, resolve_originating_source
 from app.core.feed import current_week_start, is_feed_in_scope
-from app.core.market import MarketEvent, build_market_overview, event_matches_player
+from app.core.market import (
+    PLAYERS,
+    MarketEvent,
+    build_market_overview,
+    event_matches_player,
+    market_category,
+    matching_players,
+)
+from app.core.providers.llm import LLM_UNAVAILABLE, resolve_llm_mode
 
 router = APIRouter()
 
@@ -48,6 +56,19 @@ class LinkedArticleResponse(BaseModel):
         return _iso_utc(dt)
 
 
+class RelatedEventResponse(BaseModel):
+    """Another live development that shares an organization or topic."""
+    id: str
+    headline: str
+    event_time: Optional[datetime] = None
+    category: str = ""
+    reason: str
+
+    @field_serializer("event_time")
+    def _ser_event_time(self, dt: Optional[datetime], _info):
+        return _iso_utc(dt)
+
+
 class EventResponse(BaseModel):
     id: str
     headline: str
@@ -70,8 +91,15 @@ class EventResponse(BaseModel):
     # Actual entities extracted by the LLM (organizations, products, people)
     entities: List[str] = []
     mentioned_entities: List[str] = []
+    # Market category from the event's primary subject (same rule as the overview).
+    category: str = ""
     # All linked articles (supporting sources / evidence provenance)
     linked_articles: List[LinkedArticleResponse] = []
+    # Set when this row was merged into another canonical event. The detail
+    # page follows canonical_id so an old link never shows an empty card.
+    superseded_by_id: Optional[str] = None
+    canonical_id: Optional[str] = None
+    related: List[RelatedEventResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -93,11 +121,21 @@ def _synthetic_source(name: Optional[str], url: Optional[str], tier: str = "seco
     return SourceResponse(name=name, url=_safe_http_url(url) or "", tier=tier)
 
 
+def _primary_hosts(db: Session) -> set:
+    """Registrable hosts of curated primary sources, for validating an origin."""
+    return {
+        host_of(url)
+        for (url,) in db.query(Source.url).filter(Source.tier == "primary").all()
+        if url
+    }
+
+
 def _event_response(
     event: Event,
     *,
     linked_articles: Optional[List[LinkedArticleResponse]] = None,
     include_reasoning: bool = False,
+    primary_hosts: Optional[set] = None,
 ) -> EventResponse:
     image_url = _safe_http_url(event.image_url, keep_query=True)
     ingest = _source_response(event.primary_source)
@@ -110,11 +148,12 @@ def _event_response(
     official = None
     display = ingest
     if origin.used_official:
-        official = _synthetic_source(
-            origin.official_name,
-            origin.official_url,
-            event.primary_source.tier if event.primary_source else "secondary",
-        )
+        # The originating publisher behind an aggregator link. It is an
+        # official source only when its host is a registered primary source;
+        # otherwise it is the original article, not an official statement.
+        # The aggregator's own tier (community) never describes the origin.
+        tier = evidence_tier_for_origin(origin, primary_hosts or set()) or "origin"
+        official = _synthetic_source(origin.official_name, origin.official_url, tier)
         display = official
     mentioned = event.mentioned_entities if getattr(event, "mentioned_entities", None) else []
     primary = event.entities if event.entities else []
@@ -144,6 +183,7 @@ def _event_response(
         article_url=_safe_http_url(event.article_url),
         entities=entities,
         mentioned_entities=extra if include_reasoning else [],
+        category=market_category(_to_market_event(event, [])) or "",
         linked_articles=linked_articles or [],
     )
 
@@ -251,6 +291,8 @@ def _to_market_event(event: Event, sources: list, primary_hosts: Optional[set] =
         source_tiers=tiers,
         organization_name=organization,
         primary_source_name=primary_name,
+        primary_source_tier=(event.primary_source.tier or "") if event.primary_source else "",
+        display_source_name=(origin.official_name if origin.used_official else primary_name) or "",
     )
 
 
@@ -279,6 +321,41 @@ def _in_current_week(query, now: Optional[datetime] = None):
     return query.filter(occurred >= start)
 
 
+def _filtered_page(query, keep, skip: int, limit: int, batch: int = 200) -> list:
+    """
+    Apply a Python-side filter before pagination, not after it.
+
+    Filtering one SQL page would return short pages and silently drop
+    matching rows beyond the first `limit` candidates.
+    """
+    kept: list = []
+    passed = 0
+    offset = 0
+    while len(kept) < limit:
+        rows = query.offset(offset).limit(batch).all()
+        if not rows:
+            break
+        offset += len(rows)
+        for row in rows:
+            if not keep(row):
+                continue
+            if passed < skip:
+                passed += 1
+                continue
+            kept.append(row)
+            if len(kept) == limit:
+                break
+    return kept
+
+
+def _in_feed_scope(event: Event) -> bool:
+    return is_feed_in_scope(
+        event.headline,
+        event.short_summary,
+        event.primary_source.tier if event.primary_source else None,
+    )
+
+
 @router.get("/", response_model=List[EventResponse])
 def get_events(
     db: Session = Depends(get_db),
@@ -302,9 +379,11 @@ def get_events(
     scope=week limits the feed to the current Monday–Sunday UTC week and
     drops non-AI items from secondary and community sources.
     """
-    query = db.query(Event).options(joinedload(Event.primary_source)).filter(
-        Event.superseded_by_id.is_(None)
-    )
+    if player and player not in _PLAYER_SLUGS:
+        raise HTTPException(status_code=404, detail="Unknown player")
+    query = db.query(Event).options(
+        joinedload(Event.primary_source).joinedload(Source.organization)
+    ).filter(Event.superseded_by_id.is_(None))
     query = _high_signal(query)
     if scope == "week":
         query = _in_current_week(query)
@@ -324,26 +403,23 @@ def get_events(
         query = query.join(Source, Event.primary_source_id == Source.id)
         query = query.filter(Source.organization_id == organization_id)
 
-    events = _order_by_real_world_time(query).offset(skip).limit(limit).all()
-    if scope == "week":
-        events = [
-            event
-            for event in events
-            if is_feed_in_scope(
-                event.headline,
-                event.short_summary,
-                event.primary_source.tier if event.primary_source else None,
-            )
-        ]
-    if player:
-        events = [
-            event for event in events
-            if event_matches_player(_to_market_event(event, []), player)
-        ]
+    ordered = _order_by_real_world_time(query)
+    if scope == "week" or player:
+        def keep(event: Event) -> bool:
+            if scope == "week" and not _in_feed_scope(event):
+                return False
+            if player and not event_matches_player(_to_market_event(event, []), player):
+                return False
+            return True
+
+        events = _filtered_page(ordered, keep, skip, limit)
+    else:
+        events = ordered.offset(skip).limit(limit).all()
 
     # Linked articles are omitted from the list view for performance.
     # They are populated in the single-event detail endpoint.
-    return [_event_response(event) for event in events]
+    hosts = _primary_hosts(db)
+    return [_event_response(event, primary_hosts=hosts) for event in events]
 
 
 @router.get("/new_count", response_model=dict)
@@ -388,15 +464,7 @@ def get_new_events_count(
             .options(joinedload(Event.primary_source))
             .all()
         )
-        count = sum(
-            1
-            for event in rows
-            if is_feed_in_scope(
-                event.headline,
-                event.short_summary,
-                event.primary_source.tier if event.primary_source else None,
-            )
-        )
+        count = sum(1 for event in rows if _in_feed_scope(event))
         return {"new_events_count": count}
     return {"new_events_count": query.count()}
 
@@ -415,25 +483,120 @@ def get_market_overview(db: Session = Depends(get_db)):
     query = _high_signal(query)
     query = _in_current_week(query)
     rows = _order_by_real_world_time(query).limit(250).all()
-    rows = [
-        event for event in rows
-        if is_feed_in_scope(
-            event.headline,
-            event.short_summary,
-            event.primary_source.tier if event.primary_source else None,
-        )
-    ]
+    rows = [event for event in rows if _in_feed_scope(event)]
     links = _linked_sources_by_event(db, [event.id for event in rows])
-    primary_hosts = {
-        host_of(source.url)
-        for source in db.query(Source).filter(Source.tier == "primary").all()
-        if source.url
-    }
+    primary_hosts = _primary_hosts(db)
     overview = build_market_overview([
         _to_market_event(event, links.get(event.id, []), primary_hosts)
         for event in rows
     ])
+    overview["ingestion"] = _ingestion_status(db)
     return overview
+
+
+def _ingestion_status(db: Session) -> dict:
+    """
+    Freshness the reader can trust. "Live" is a claim about ingestion,
+    not about the newest story, so it comes from the pipeline state.
+    """
+    last_ingested = (
+        db.query(func.max(Event.created_at))
+        .filter(Event.superseded_by_id.is_(None))
+        .scalar()
+    )
+    enabled = db.query(Source).filter(Source.enabled.is_(True)).all()
+    failing = sum(1 for source in enabled if (source.health_status or "").lower() == "failing")
+    return {
+        "llm_available": resolve_llm_mode() != LLM_UNAVAILABLE,
+        "last_ingested_at": _iso_utc(last_ingested),
+        "sources_enabled": len(enabled),
+        "sources_failing": failing,
+    }
+
+
+_PLAYER_SLUGS = {slug for slug, _name, _aliases in PLAYERS}
+_PLAYER_NAMES = {slug: name for slug, name, _aliases in PLAYERS}
+RELATED_WINDOW = timedelta(days=7)
+
+
+def _naive_utc(moment: Optional[datetime]) -> Optional[datetime]:
+    if moment is None or moment.tzinfo is None:
+        return moment
+    return moment.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _canonical_of(db: Session, event: Event) -> Event:
+    """Follow superseded_by_id to the live canonical event (bounded, cycle-safe)."""
+    current = event
+    seen = {current.id}
+    for _ in range(16):
+        if current.superseded_by_id is None:
+            return current
+        nxt = db.query(Event).filter(Event.id == current.superseded_by_id).first()
+        if nxt is None or nxt.id in seen:
+            return current
+        seen.add(nxt.id)
+        current = nxt
+    return current
+
+
+def _related_events(db: Session, event: Event, limit: int = 5) -> List[RelatedEventResponse]:
+    """
+    Other live developments near this one that share an attributed
+    organization, or share a named entity within the same category.
+    A shared generic word is not a relationship.
+    """
+    anchor = _naive_utc(event.event_time or event.created_at)
+    if anchor is None:
+        return []
+    when = func.coalesce(Event.event_time, Event.created_at)
+    candidates = _high_signal(
+        db.query(Event)
+        .options(joinedload(Event.primary_source).joinedload(Source.organization))
+        .filter(
+            Event.superseded_by_id.is_(None),
+            Event.id != event.id,
+            when >= anchor - RELATED_WINDOW,
+            when <= anchor + RELATED_WINDOW,
+        )
+    ).limit(300).all()
+    base = _to_market_event(event, [])
+    base_players = {slug for slug, _name in matching_players(base)}
+    base_category = market_category(base)
+    base_entities = {item.strip().lower() for item in base.entities if len(item.strip()) > 2}
+    base_headline = (event.headline or "").strip().lower()
+    scored = []
+    for candidate in candidates:
+        if not _in_feed_scope(candidate):
+            continue
+        if (candidate.headline or "").strip().lower() == base_headline:
+            continue
+        other = _to_market_event(candidate, [])
+        shared_players = base_players & {slug for slug, _name in matching_players(other)}
+        category = market_category(other) or ""
+        shared_entities = base_entities & {
+            item.strip().lower() for item in other.entities if len(item.strip()) > 2
+        }
+        if shared_players:
+            reason = ", ".join(sorted(_PLAYER_NAMES[slug] for slug in shared_players))
+        elif shared_entities and base_category and category == base_category:
+            reason = category
+        else:
+            continue
+        other_time = _naive_utc(candidate.event_time or candidate.created_at)
+        distance = abs((other_time - anchor).total_seconds()) if other_time else float("inf")
+        scored.append((
+            (-len(shared_players), -len(shared_entities), distance),
+            RelatedEventResponse(
+                id=str(candidate.id),
+                headline=candidate.headline,
+                event_time=candidate.event_time or candidate.created_at,
+                category=category,
+                reason=reason,
+            ),
+        ))
+    scored.sort(key=lambda item: item[0])
+    return [item[1] for item in scored[:limit]]
 
 
 @router.get("/{event_id}", response_model=EventResponse)
@@ -451,8 +614,19 @@ def get_event(event_id: str, db: Session = Depends(get_db)):
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    return _event_response(
+    response = _event_response(
         event,
         linked_articles=_build_linked_articles(db, event.id),
         include_reasoning=True,
+        primary_hosts=_primary_hosts(db),
     )
+    if event.superseded_by_id is not None:
+        # A merged duplicate keeps its id so old links resolve, but its
+        # articles now live on the canonical event. Point the client there.
+        canonical = _canonical_of(db, event)
+        response.superseded_by_id = str(event.superseded_by_id)
+        response.canonical_id = str(canonical.id)
+    else:
+        response.canonical_id = str(event.id)
+        response.related = _related_events(db, event)
+    return response

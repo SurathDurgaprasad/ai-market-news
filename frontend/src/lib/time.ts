@@ -171,3 +171,34 @@ export function groupFeedByRecency<T extends { event_time?: string | null; creat
   pushMulti("older", "Older this week", buckets.older);
   return sections;
 }
+
+/**
+ * Feeds that publish only a date produce exactly 00:00:00 UTC. Showing
+ * "12:00 AM" for those would claim a precision the source never gave.
+ */
+export function hasClockTime(value?: string | null): boolean {
+  if (!value) return false;
+  const match = value.trim().match(/^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?/);
+  if (!match) return false;
+  const [, hour, minute, second = "00", fraction = "0"] = match;
+  return !(hour === "00" && minute === "00" && second === "00" && /^0*$/.test(fraction));
+}
+
+/** Clock time when the source gave one, otherwise the day. */
+export function formatUtcCardTime(value?: string | null): string {
+  return hasClockTime(value) ? formatUtcClock(value) : formatUtcDay(value);
+}
+
+/** Full stamp with time only when the source gave one. */
+export function formatUtcWhen(value?: string | null): string {
+  if (hasClockTime(value)) return formatUtcInstrument(value);
+  return formatUtcDay(value);
+}
+
+/** Coarse age for freshness labels. Server-rendered only. */
+export function ageHours(value?: string | null, nowMs: number = Date.now()): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return null;
+  return (nowMs - parsed) / 3_600_000;
+}

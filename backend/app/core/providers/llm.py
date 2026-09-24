@@ -151,6 +151,21 @@ LLM_UNAVAILABLE = "unavailable"
 
 T = TypeVar("T", bound=BaseModel)
 
+_DELIMITER_TAG = re.compile(r"<\s*/?\s*article\b[^>]*>", re.IGNORECASE)
+
+
+def _as_untrusted(content: Optional[str]) -> str:
+    """
+    Keep untrusted text inside its <article> delimiter.
+
+    Fetched pages can contain a literal "</article>" (it is ordinary HTML),
+    which would close the untrusted block early and put the rest of the page
+    where the prompt treats text as instructions. The tag is removed; the
+    words around it are kept.
+    """
+    return _DELIMITER_TAG.sub(" ", content or "")
+
+
 CLASSIFY_SYSTEM_PROMPT = (
     "You classify real-world AI-ecosystem events by factual impact, not company prestige.\n"
     "event_kind must be one of: model_release, model_family, capability, hardware_platform, "
@@ -601,7 +616,7 @@ class OpenAIProvider(LLMProvider):
         logger.info("Classifying event via OpenAI model=%s", self.model)
         try:
             return self._complete_json(
-                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", EventClassification
+                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{_as_untrusted(content)}\n</article>", EventClassification
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("OpenAI classify_event produced invalid schema; dropping classification")
@@ -619,7 +634,7 @@ class OpenAIProvider(LLMProvider):
         logger.info("Summarizing event via OpenAI model=%s", self.model)
         try:
             return self._complete_json(
-                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", SourceGroundedSummary
+                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{_as_untrusted(content)}\n</article>", SourceGroundedSummary
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("OpenAI summarize_event produced invalid schema")
@@ -644,7 +659,7 @@ class OpenAIProvider(LLMProvider):
         try:
             raw = self._complete_json(
                 RELATIONSHIP_SYSTEM_PROMPT,
-                f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
+                f"Existing Event Summary:\n{_as_untrusted(event_summary)}{_as_untrusted(context_block)}\n\nNew Article:\n<article>\n{_as_untrusted(content)}\n</article>",
                 RelationshipResult,
             )
             rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT
@@ -783,7 +798,7 @@ class NVIDIAProvider(LLMProvider):
         try:
             return self._complete_json(
                 CLASSIFY_SYSTEM_PROMPT,
-                f"<article>\n{content}\n</article>",
+                f"<article>\n{_as_untrusted(content)}\n</article>",
                 EventClassification,
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
@@ -803,7 +818,7 @@ class NVIDIAProvider(LLMProvider):
         try:
             return self._complete_json(
                 SUMMARIZE_SYSTEM_PROMPT,
-                f"<article>\n{content}\n</article>",
+                f"<article>\n{_as_untrusted(content)}\n</article>",
                 SourceGroundedSummary,
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
@@ -829,7 +844,7 @@ class NVIDIAProvider(LLMProvider):
         try:
             raw = self._complete_json(
                 RELATIONSHIP_SYSTEM_PROMPT,
-                f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
+                f"Existing Event Summary:\n{_as_untrusted(event_summary)}{_as_untrusted(context_block)}\n\nNew Article:\n<article>\n{_as_untrusted(content)}\n</article>",
                 RelationshipResult,
             )
             rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT
@@ -902,7 +917,7 @@ class AnthropicProvider(LLMProvider):
         logger.info("Classifying event via Anthropic model=%s", self.model)
         try:
             return self._complete_json(
-                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", EventClassification
+                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{_as_untrusted(content)}\n</article>", EventClassification
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("Anthropic classify_event produced invalid schema; dropping classification")
@@ -920,7 +935,7 @@ class AnthropicProvider(LLMProvider):
         logger.info("Summarizing event via Anthropic model=%s", self.model)
         try:
             return self._complete_json(
-                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", SourceGroundedSummary
+                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{_as_untrusted(content)}\n</article>", SourceGroundedSummary
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("Anthropic summarize_event produced invalid schema")
@@ -945,7 +960,7 @@ class AnthropicProvider(LLMProvider):
         try:
             raw = self._complete_json(
                 RELATIONSHIP_SYSTEM_PROMPT,
-                f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
+                f"Existing Event Summary:\n{_as_untrusted(event_summary)}{_as_untrusted(context_block)}\n\nNew Article:\n<article>\n{_as_untrusted(content)}\n</article>",
                 RelationshipResult,
             )
             rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT
@@ -1149,7 +1164,7 @@ class BedrockProvider(LLMProvider):
         logger.info("Classifying event via Bedrock model=%s", self.model)
         try:
             return self._complete_json(
-                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", EventClassification
+                CLASSIFY_SYSTEM_PROMPT, f"<article>\n{_as_untrusted(content)}\n</article>", EventClassification
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("Bedrock classify_event produced invalid schema; dropping classification")
@@ -1167,7 +1182,7 @@ class BedrockProvider(LLMProvider):
         logger.info("Summarizing event via Bedrock model=%s", self.model)
         try:
             return self._complete_json(
-                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{content}\n</article>", SourceGroundedSummary
+                SUMMARIZE_SYSTEM_PROMPT, f"<article>\n{_as_untrusted(content)}\n</article>", SourceGroundedSummary
             )
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.warning("Bedrock summarize_event produced invalid schema")
@@ -1192,7 +1207,7 @@ class BedrockProvider(LLMProvider):
         try:
             raw = self._complete_json(
                 RELATIONSHIP_SYSTEM_PROMPT,
-                f"Existing Event Summary:\n{event_summary}{context_block}\n\nNew Article:\n<article>\n{content}\n</article>",
+                f"Existing Event Summary:\n{_as_untrusted(event_summary)}{_as_untrusted(context_block)}\n\nNew Article:\n<article>\n{_as_untrusted(content)}\n</article>",
                 RelationshipResult,
             )
             rel = raw.relationship if raw.relationship in _VALID_RELATIONSHIPS else EventRelationship.DIFFERENT_EVENT

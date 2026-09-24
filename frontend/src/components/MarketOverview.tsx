@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { formatUtcInstrument, factualSummary } from "@/lib/time";
+import { factualSummary, formatUtcWhen } from "@/lib/time";
 
 export type OverviewCard = {
   id: string;
@@ -12,6 +13,7 @@ export type OverviewCard = {
   importance_label: string;
   source_count: number;
   source_label: string;
+  source_name?: string;
 };
 
 export type PulseExample = {
@@ -49,6 +51,13 @@ export type PlayerActivity = {
   event_ids: string[];
 };
 
+export type IngestionStatus = {
+  llm_available: boolean;
+  last_ingested_at: string | null;
+  sources_enabled: number;
+  sources_failing: number;
+};
+
 export type MarketOverviewData = {
   as_of: string;
   happening_now: OverviewCard[];
@@ -56,6 +65,7 @@ export type MarketOverviewData = {
   biggest: OverviewCard[];
   pulse: ActivityCount[];
   players: PlayerActivity[];
+  ingestion?: IngestionStatus;
 };
 
 function importanceClass(label: string): string {
@@ -80,27 +90,48 @@ function SectionHeading({
   note?: string;
 }) {
   return (
-    <div className="mb-4 border-b border-line pb-3">
+    <div className="mb-1 border-b border-line pb-2.5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{kicker}</p>
-      <h2 id={id} className="mt-1 text-lg font-semibold tracking-tight text-ink">
+      <h2 id={id} className="mt-0.5 scroll-mt-4 text-[17px] font-semibold tracking-tight text-ink">
         {title}
       </h2>
-      {note ? <p className="mt-1 text-[13px] text-muted">{note}</p> : null}
+      {note ? <p className="mt-0.5 text-[12px] leading-relaxed text-muted">{note}</p> : null}
     </div>
   );
 }
 
+function EmptyNote({ children }: { children: ReactNode }) {
+  return <p className="py-4 text-[13px] leading-relaxed text-muted">{children}</p>;
+}
+
+function CardMeta({ card }: { card: OverviewCard }) {
+  return (
+    <p className="text-[12px] text-muted">
+      <span className={importanceClass(card.importance_label)}>{card.importance_label}</span>
+      {card.source_label ? (
+        <span>
+          {" · "}
+          {card.source_label}
+          {card.source_name ? `: ${card.source_name}` : ""}
+        </span>
+      ) : null}
+      {card.source_count > 1 ? <span> · {countLabel(card.source_count, "source", "sources")}</span> : null}
+    </p>
+  );
+}
+
+function subjectLine(card: OverviewCard): string {
+  return [card.organization, card.category].filter(Boolean).join(" · ");
+}
+
 function HappeningCard({ card }: { card: OverviewCard }) {
   const summary = factualSummary(card.summary);
-  const stamp = formatUtcInstrument(card.event_time);
-  const meta = [card.organization, card.category].filter(Boolean).join(" · ");
-
   return (
-    <article className="border-b border-line py-4 last:border-b-0">
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <p className="text-[12px] text-secondary">{meta}</p>
-        <time className="text-[11px] tracking-wide text-muted" dateTime={card.event_time}>
-          {stamp}
+    <article className="border-b border-line py-3.5 last:border-b-0">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+        <p className="text-[12px] font-medium text-secondary">{subjectLine(card)}</p>
+        <time className="text-[11px] tabular-nums tracking-wide text-muted" dateTime={card.event_time}>
+          {formatUtcWhen(card.event_time)}
         </time>
       </div>
       <h3 className="text-[1.05rem] font-medium leading-snug tracking-tight text-ink">
@@ -109,15 +140,32 @@ function HappeningCard({ card }: { card: OverviewCard }) {
         </Link>
       </h3>
       {summary ? (
-        <p className="mt-2 line-clamp-3 text-[14px] leading-relaxed text-muted">{summary}</p>
+        <p className="mt-1.5 line-clamp-2 text-[14px] leading-relaxed text-muted">{summary}</p>
       ) : null}
-      <p className="mt-2 text-[12px] text-muted">
-        <span className={importanceClass(card.importance_label)}>{card.importance_label}</span>
-        {card.source_count > 0 ? (
-          <span> · {countLabel(card.source_count, "source", "sources")}</span>
-        ) : null}
-        {card.source_label ? <span> · {card.source_label}</span> : null}
-      </p>
+      <div className="mt-1.5">
+        <CardMeta card={card} />
+      </div>
+    </article>
+  );
+}
+
+function BiggestCard({ card }: { card: OverviewCard }) {
+  return (
+    <article className="border-b border-line py-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+        <p className="text-[12px] font-medium text-secondary">{subjectLine(card)}</p>
+        <time className="text-[11px] tabular-nums tracking-wide text-muted" dateTime={card.event_time}>
+          {formatUtcWhen(card.event_time)}
+        </time>
+      </div>
+      <h3 className="mt-1 text-[1rem] font-medium leading-snug text-ink">
+        <Link href={`/events/${card.id}`} className="hover:text-accent">
+          {card.headline}
+        </Link>
+      </h3>
+      <div className="mt-1.5">
+        <CardMeta card={card} />
+      </div>
     </article>
   );
 }
@@ -135,30 +183,41 @@ function evidenceLine(week: number, sources: number, recent?: number): string {
 
 function TrendList({ rows }: { rows: TrendActivity[] }) {
   return (
-    <div>
+    <ul>
       {rows.map((row) => (
-        <article key={row.label} className="border-b border-line py-3 last:border-b-0">
-          <h3 className="text-[12px] font-semibold uppercase tracking-[0.16em] text-ink">{row.label}</h3>
-          <p className="mt-1 text-[13px] text-secondary">{evidenceLine(row.week, row.sources, row.recent)}</p>
-        </article>
+        <li key={row.label} className="flex items-baseline justify-between gap-3 border-b border-line py-2.5 last:border-b-0">
+          <span className="text-[13px] font-medium text-ink">{row.label}</span>
+          <span className="text-right text-[12px] tabular-nums text-secondary">
+            {evidenceLine(row.week, row.sources, row.recent)}
+          </span>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
 function PulseList({ rows }: { rows: ActivityCount[] }) {
+  const max = Math.max(1, ...rows.map((row) => row.week));
   return (
-    <div>
+    <ul>
       {rows.map((row) => (
-        <article key={row.label} className="border-b border-line py-3 last:border-b-0">
-          <h3 className="text-[13px] font-medium text-ink">{row.label}</h3>
-          <p className="mt-1 text-[13px] text-secondary">
-            {evidenceLine(row.week, row.sources ?? 0, row.recent)}
-          </p>
+        <li key={row.label} className="border-b border-line py-2.5 last:border-b-0">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-[13px] font-medium text-ink">{row.label}</span>
+            <span className="text-right text-[12px] tabular-nums text-secondary">
+              {evidenceLine(row.week, row.sources ?? 0, row.recent)}
+            </span>
+          </div>
+          <div className="mt-1.5 h-[3px] w-full rounded-full bg-elevated" aria-hidden="true">
+            <div
+              className="h-full rounded-full bg-accent/60"
+              style={{ width: `${Math.max(4, Math.round((row.week / max) * 100))}%` }}
+            />
+          </div>
           {row.examples && row.examples.length > 0 ? (
-            <ul className="mt-1.5 space-y-1">
+            <ul className="mt-2 space-y-1">
               {row.examples.map((example) => (
-                <li key={example.id} className="text-[13px] leading-snug text-muted">
+                <li key={example.id} className="text-[12px] leading-snug text-muted">
                   <Link href={`/events/${example.id}`} className="hover:text-accent">
                     {example.headline}
                   </Link>
@@ -166,9 +225,9 @@ function PulseList({ rows }: { rows: ActivityCount[] }) {
               ))}
             </ul>
           ) : null}
-        </article>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -186,7 +245,13 @@ function playerStats(player: PlayerActivity): string {
   return parts.join(" · ");
 }
 
-export function MarketOverview({ data }: { data: MarketOverviewData }) {
+export function MarketOverview({
+  data,
+  stale = false,
+}: {
+  data: MarketOverviewData;
+  stale?: boolean;
+}) {
   const happening = data.happening_now ?? [];
   const trending = data.trending ?? [];
   const biggest = data.biggest ?? [];
@@ -201,80 +266,76 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
 
   if (!hasAnything) return null;
 
-  return (
-    <div className="mb-14 space-y-12">
-      {happening.length > 0 ? (
-        <section aria-labelledby="happening-now">
-          <SectionHeading
-            id="happening-now"
-            kicker="Now"
-            title="What's happening now"
-            note="Most meaningful developments in the last 36 hours. Times in UTC."
-          />
-          <div>
-            {happening.map((card) => (
-              <HappeningCard key={card.id} card={card} />
-            ))}
-          </div>
-        </section>
-      ) : null}
+  const quietReason = stale
+    ? " Ingestion is not current, so recent activity may be missing."
+    : "";
 
-      {trending.length > 0 || pulse.length > 0 ? (
-        <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
-          {trending.length > 0 ? (
-            <section aria-labelledby="trending">
+  return (
+    <div className="mb-12 space-y-10">
+      <div className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)] xl:gap-14">
+        <div className="min-w-0 space-y-10">
+          <section aria-labelledby="happening-now">
+            <SectionHeading
+              id="happening-now"
+              kicker="Now"
+              title="What's happening now"
+              note="Significant developments from the last 36 hours."
+            />
+            {happening.length > 0 ? (
+              happening.map((card) => <HappeningCard key={card.id} card={card} />)
+            ) : (
+              <EmptyNote>
+                No significant development in the last 36 hours.{quietReason} This week&apos;s
+                biggest developments are below.
+              </EmptyNote>
+            )}
+          </section>
+
+          {biggest.length > 0 ? (
+            <section aria-labelledby="biggest">
               <SectionHeading
-                id="trending"
+                id="biggest"
                 kicker="This week"
-                title="Trending"
-                note="Distinct developments from more than one publisher, with activity in the last 36 hours."
+                title="Biggest AI developments"
+                note="Direct developments, ranked by importance and source quality."
               />
-              <TrendList rows={trending} />
+              <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
+                {biggest.map((card) => (
+                  <BiggestCard key={card.id} card={card} />
+                ))}
+              </div>
             </section>
           ) : null}
+        </div>
+
+        <aside className="min-w-0 space-y-10" aria-label="Activity by category">
+          <section aria-labelledby="trending">
+            <SectionHeading
+              id="trending"
+              kicker="Last 36 hours"
+              title="Trending"
+              note="Categories with distinct developments from more than one publisher."
+            />
+            {trending.length > 0 ? (
+              <TrendList rows={trending} />
+            ) : (
+              <EmptyNote>No category has recent activity from more than one publisher.{quietReason}</EmptyNote>
+            )}
+          </section>
+
           {pulse.length > 0 ? (
             <section aria-labelledby="market-pulse">
               <SectionHeading
                 id="market-pulse"
                 kicker="This week"
                 title="AI market pulse"
-                note="Substantive developments this week. Repeated coverage of one story counts once."
+                note="Substantive developments per category. Repeated coverage counts once."
               />
               <PulseList rows={pulse} />
             </section>
           ) : null}
-        </div>
-      ) : null}
-
-      {biggest.length > 0 ? (
-        <section aria-labelledby="biggest">
-          <SectionHeading
-            id="biggest"
-            kicker="This week"
-            title="Biggest AI developments"
-            note="Direct developments this week, by importance and source quality."
-          />
-          <div className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
-            {biggest.map((card) => (
-              <article key={card.id} className="border-b border-line py-4">
-                <p className="text-[12px] text-secondary">
-                  {[card.organization, card.category].filter(Boolean).join(" · ")}
-                </p>
-                <h3 className="mt-1 text-[1rem] font-medium leading-snug text-ink">
-                  <Link href={`/events/${card.id}`} className="hover:text-accent">
-                    {card.headline}
-                  </Link>
-                </h3>
-                <p className="mt-2 text-[12px] text-muted">
-                  <span className={importanceClass(card.importance_label)}>{card.importance_label}</span>
-                  {card.source_label ? <span> · {card.source_label}</span> : null}
-                  <span> · {formatUtcInstrument(card.event_time)}</span>
-                </p>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
+        </aside>
+      </div>
 
       {players.length > 0 ? (
         <section aria-labelledby="players">
@@ -282,22 +343,26 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
             id="players"
             kicker="This week"
             title="Major AI players"
-            note="Substantive excludes discussion, roundups, and customer-deployment posts."
+            note="Developments attributed to each organization. Substantive excludes discussion, roundups, and customer stories."
           />
-          <div>
+          <ul>
             {players.map((player) => (
-              <article key={player.slug} className="grid grid-cols-1 gap-2 border-b border-line py-4 md:grid-cols-[11rem_1fr_auto] md:items-baseline md:gap-6">
+              <li
+                key={player.slug}
+                className="grid grid-cols-1 gap-1.5 border-b border-line py-3 last:border-b-0 md:grid-cols-[12rem_minmax(0,1fr)_auto] md:items-baseline md:gap-6"
+              >
                 <div>
-                  <h3 className="text-[15px] font-medium text-ink">
+                  <h3 className="text-[14px] font-medium text-ink">
                     <Link href={`/players/${player.slug}`} className="hover:text-accent">
                       {player.name}
                     </Link>
                   </h3>
                   {player.categories && player.categories.length > 0 ? (
-                    <p className="mt-1 text-[12px] text-muted">{player.categories.join(" · ")}</p>
+                    <p className="mt-0.5 text-[12px] text-muted">{player.categories.join(" · ")}</p>
                   ) : null}
                 </div>
                 <p className="min-w-0 text-[14px] leading-snug text-secondary">
+                  <span className="sr-only">Latest: </span>
                   <Link href={`/events/${player.latest_event_id}`} className="hover:text-accent">
                     {player.latest_headline}
                   </Link>
@@ -305,12 +370,12 @@ export function MarketOverview({ data }: { data: MarketOverviewData }) {
                 <div className="text-[12px] tabular-nums text-muted md:text-right">
                   <p>{playerStats(player)}</p>
                   {player.latest_time ? (
-                    <p className="mt-1 tracking-wide">{formatUtcInstrument(player.latest_time)}</p>
+                    <p className="mt-0.5 tracking-wide">Latest {formatUtcWhen(player.latest_time)}</p>
                   ) : null}
                 </div>
-              </article>
+              </li>
             ))}
-          </div>
+          </ul>
         </section>
       ) : null}
     </div>

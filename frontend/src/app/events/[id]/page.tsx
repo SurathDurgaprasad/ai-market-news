@@ -1,25 +1,67 @@
 import React from 'react';
 import Link from 'next/link';
+import { notFound, redirect, unstable_rethrow } from 'next/navigation';
 import { API_V1 } from '@/lib/api';
 import { formatCitation } from '@/lib/citations';
 import { detailImageClass, importanceMeta, type ImageRole } from '@/lib/importance';
-import { evidenceLabel } from '@/lib/sources';
-import { factualSummary, formatUtcMeta } from '@/lib/time';
+import { displaySource, evidenceLabel, isOfficialTier, type SourceRef } from '@/lib/sources';
+import { factualSummary, formatUtcMeta, formatUtcWhen, hasClockTime, formatUtcDay } from '@/lib/time';
 import { safeHttpUrl } from '@/lib/urls';
 
-async function getEvent(id: string) {
+type LinkedArticle = {
+  title: string;
+  url: string;
+  source_name: string;
+  source_tier?: string;
+  published_at?: string | null;
+  link_type: string;
+};
+
+type RelatedEvent = {
+  id: string;
+  headline: string;
+  event_time?: string | null;
+  category?: string;
+  reason: string;
+};
+
+type EventDetail = {
+  id: string;
+  headline: string;
+  short_summary: string;
+  what_changed?: string | null;
+  importance_score?: number;
+  created_at: string;
+  event_time?: string | null;
+  category?: string;
+  primary_source?: SourceRef | null;
+  ingest_source?: SourceRef | null;
+  official_source?: SourceRef | null;
+  citations?: string[];
+  image_url?: string | null;
+  image_role?: string;
+  article_url?: string | null;
+  entities?: string[];
+  linked_articles?: LinkedArticle[];
+  canonical_id?: string | null;
+  related?: RelatedEvent[];
+};
+
+type Loaded = { kind: 'ok'; event: EventDetail } | { kind: 'missing' } | { kind: 'unavailable' };
+
+const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+
+async function getEvent(id: string): Promise<Loaded> {
+  if (!UUID.test(id)) return { kind: 'missing' };
   try {
-    const res = await fetch(`${API_V1}/events/${id}`, {
-      cache: 'no-store',
-    });
-    if (!res.ok) {
-      if (res.status === 404) return null;
-      throw new Error(`API returned ${res.status}`);
-    }
-    return await res.json();
+    const res = await fetch(`${API_V1}/events/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    if (res.status === 404 || res.status === 400) return { kind: 'missing' };
+    if (!res.ok) throw new Error(`API returned ${res.status}`);
+    return { kind: 'ok', event: await res.json() };
   } catch (error) {
+    unstable_rethrow(error);
     console.error('Failed to fetch event detail:', error);
-    return null;
+    return { kind: 'unavailable' };
   }
 }
 
@@ -27,17 +69,39 @@ function changePoints(value?: string | null): string[] {
   if (!value) return [];
   return value
     .split('\n')
-    .map((line) => line.replace(/^\s*[-•]\s*/, '').trim())
+    .map((line) => line.replace(/^\s*[-•*]\s*/, '').trim())
     .filter(Boolean);
-}
-
-function padIndex(index: number): string {
-  return String(index + 1).padStart(2, '0');
 }
 
 function asImageRole(value: unknown): ImageRole | undefined {
   if (value === 'hero' || value === 'source' || value === 'none') return value;
   return undefined;
+}
+
+function published(value?: string | null): string {
+  if (!value) return '';
+  return hasClockTime(value) ? formatUtcMeta(value) : formatUtcDay(value);
+}
+
+const OPEN_LABEL: Record<string, string> = {
+  'Official source': 'Open official source',
+  'Research paper': 'Open paper',
+  'Original article': 'Open original article',
+  'News coverage': 'Open article',
+  Discussion: 'Open discussion',
+};
+
+// Long extractions name every person quoted; the first few carry the subject.
+const ENTITY_PREVIEW = 10;
+
+function EntityChip({ name }: { name: string }) {
+  return <li className="rounded border border-line px-2 py-0.5 text-[13px] text-secondary">{name}</li>;
+}
+
+function SideHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{children}</h2>
+  );
 }
 
 export default async function EventDetailPage({
@@ -46,265 +110,284 @@ export default async function EventDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const event = await getEvent(id);
+  const loaded = await getEvent(id);
 
-  if (!event) {
+  if (loaded.kind === 'missing') notFound();
+  if (loaded.kind === 'unavailable') {
     return (
-      <main className="min-h-screen bg-canvas p-16 text-ink selection:bg-accent/30">
-        <div className="intel-shell text-center">
-          <h1 className="mb-4 text-3xl font-semibold text-danger">Event not found</h1>
-          <p className="mb-8 text-muted">
-            The event does not exist or the backend is unreachable.
-          </p>
+      <main className="flex-1 bg-canvas text-ink">
+        <div className="intel-shell py-16 text-center" role="alert">
+          <h1 className="mb-3 text-2xl font-semibold text-ink">Event temporarily unavailable</h1>
+          <p className="mb-8 text-muted">The intelligence API could not be reached. Try again shortly.</p>
           <Link href="/" className="text-accent hover:underline">
-            ← Back to Intelligence
+            ← Back to overview
           </Link>
         </div>
       </main>
     );
   }
 
-  const officialHref =
-    safeHttpUrl(event.article_url) ||
-    safeHttpUrl(event.official_source?.url) ||
-    safeHttpUrl(event.primary_source?.url);
+  const event = loaded.event;
+  // A merged duplicate resolves to the canonical event that now holds its evidence.
+  if (event.canonical_id && event.canonical_id !== event.id) {
+    redirect(`/events/${event.canonical_id}`);
+  }
+
+  const source = displaySource(event);
+  const sourceHref =
+    safeHttpUrl(event.article_url) || safeHttpUrl(source?.url) || safeHttpUrl(event.primary_source?.url);
+  const sourceLabel = evidenceLabel({ url: sourceHref, tier: source?.tier });
   const tier = importanceMeta(event.importance_score ?? 0);
-  const displayTime = formatUtcMeta(event.event_time ?? event.created_at);
+  const occurred = event.event_time ?? event.created_at;
+  const displayTime = published(occurred);
+  const firstSeen = formatUtcMeta(event.created_at);
   const summary = factualSummary(event.short_summary);
   const imageRole = asImageRole(event.image_role);
   const safeImageUrl =
     imageRole === 'none' ? undefined : safeHttpUrl(event.image_url, { keepQuery: true });
   const citations = Array.isArray(event.citations)
-    ? event.citations.map((item: string) => formatCitation(item)).filter(Boolean)
+    ? event.citations.map((item) => formatCitation(item)).filter(Boolean)
     : [];
   const keyChanges = changePoints(event.what_changed);
-  const entities: string[] = Array.isArray(event.entities)
-    ? event.entities.map((item: string) => item.trim()).filter(Boolean)
+  const entities = Array.isArray(event.entities)
+    ? event.entities.map((item) => item.trim()).filter(Boolean)
     : [];
-  const supporting = Array.isArray(event.linked_articles)
-    ? event.linked_articles.filter((article: { link_type?: string }) => article.link_type !== 'primary')
-    : [];
-  const sourceName =
-    event.official_source?.name || event.primary_source?.name || 'Unknown source';
-  const primaryLabel = evidenceLabel({
-    url: officialHref,
-    tier: event.official_source?.tier || event.primary_source?.tier,
-    official: Boolean(event.official_source) || event.primary_source?.tier === 'primary',
-  });
+  const linked = Array.isArray(event.linked_articles) ? event.linked_articles : [];
+  const supporting = linked.filter((article) => article.link_type !== 'primary');
+  const publishers = new Set(linked.map((article) => article.source_name).filter(Boolean));
+  if (source?.name) publishers.add(source.name);
+  const related = Array.isArray(event.related) ? event.related : [];
+  const ingest = event.ingest_source;
+  const discoveredVia =
+    ingest && source && ingest.name !== source.name ? ingest.name : undefined;
+  const hasOfficialEvidence =
+    isOfficialTier(source?.tier) ||
+    linked.some((article) => isOfficialTier(article.source_tier)) ||
+    sourceLabel === 'Research paper';
 
   return (
-    <main className="min-h-screen bg-canvas text-ink selection:bg-accent/30">
+    <main className="flex-1 bg-canvas text-ink selection:bg-accent/30">
       <a
         href="#event-body"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-ink focus:px-3 focus:py-2 focus:text-sm focus:text-canvas"
       >
         Skip to event
       </a>
-      <div className="intel-shell py-8 lg:py-10">
-        <nav className="mb-6">
+      <div className="intel-shell py-6 lg:py-8">
+        <nav className="mb-6" aria-label="Breadcrumb">
           <Link
             href="/"
-            className="inline-flex items-center text-sm font-medium text-secondary transition-colors hover:text-ink"
+            className="inline-flex items-center text-[13px] font-medium text-secondary transition-colors hover:text-ink"
           >
-            ← Back to Intelligence
+            ← Overview
           </Link>
         </nav>
 
+        <header className="mb-8 max-w-4xl">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em]">
+            <span className={tier.badge}>{tier.label}</span>
+            {event.category ? <span className="text-muted"> · {event.category}</span> : null}
+          </p>
+          <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.2] tracking-[-0.015em] text-ink md:text-[2.25rem] xl:text-[2.5rem]">
+            {event.headline}
+          </h1>
+          <p className="mt-4 text-[13px] text-muted">
+            {source?.name ? <span className="font-medium text-secondary">{source.name}</span> : null}
+            {source?.name && displayTime ? ' · ' : null}
+            {displayTime ? <time dateTime={occurred}>{displayTime}</time> : null}
+          </p>
+        </header>
+
         {safeImageUrl ? (
           <div
-            className={`relative mb-8 w-full overflow-hidden rounded-lg border border-line ${detailImageClass(imageRole)}`}
+            className={`relative mb-8 w-full max-w-4xl overflow-hidden rounded-md border border-line bg-elevated ${detailImageClass(imageRole)}`}
           >
             <img
               src={safeImageUrl}
               alt=""
-              role="presentation"
+              decoding="async"
+              referrerPolicy="no-referrer"
               className="absolute inset-0 h-full w-full object-cover object-center"
             />
           </div>
         ) : null}
 
-        <header className="mb-10 max-w-4xl">
-          <p className={`text-[12px] font-semibold uppercase tracking-[0.16em] ${tier.badge}`}>
-            {tier.label}
-          </p>
-          <p className="mt-4 text-[15px] font-medium text-ink">{sourceName}</p>
-          {displayTime ? (
-            <time
-              className="mt-1 block text-[13px] text-muted"
-              dateTime={event.event_time ?? event.created_at}
-            >
-              {displayTime}
-            </time>
-          ) : null}
-          <h1 className="mt-5 text-[2rem] font-semibold leading-[1.18] tracking-[-0.02em] text-ink md:text-[2.75rem] xl:text-[3.1rem]">
-            {event.headline}
-          </h1>
-        </header>
-
         <div
           id="event-body"
-          className="grid grid-cols-1 items-stretch gap-10 lg:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.85fr)] lg:gap-14"
+          className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)] lg:gap-14"
         >
-          <div className="space-y-12">
-            <section>
-              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+          <div className="min-w-0 space-y-10">
+            <section aria-labelledby="what-happened">
+              <h2 id="what-happened" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
                 What happened
               </h2>
               {summary ? (
-                <p className="max-w-[58ch] text-[17px] leading-[1.72] text-secondary md:text-[18px]">
-                  {summary}
-                </p>
+                <p className="max-w-[64ch] text-[17px] leading-[1.7] text-secondary">{summary}</p>
               ) : (
-                <div className="max-w-[58ch] rounded-lg border border-warning/40 bg-warning/10 px-5 py-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-warning">
-                    Incomplete extraction
-                  </p>
-                  <p className="mt-2 text-sm leading-relaxed text-muted">
-                    No source-grounded summary is available yet. The primary source remains available.
-                  </p>
-                </div>
+                <p className="max-w-[64ch] text-sm leading-relaxed text-muted">
+                  No source-grounded summary was extracted. The source link remains available.
+                </p>
               )}
             </section>
 
-            <section>
-              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                Key changes
-              </h2>
-              {keyChanges.length > 0 ? (
-                <ol className="max-w-[58ch] space-y-4">
-                  {keyChanges.map((item: string, idx: number) => (
-                    <li key={idx} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3">
+            {keyChanges.length > 0 ? (
+              <section aria-labelledby="key-changes">
+                <h2 id="key-changes" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+                  Key changes
+                </h2>
+                <ol className="max-w-[64ch] space-y-3">
+                  {keyChanges.map((item, idx) => (
+                    <li key={idx} className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3">
                       <span className="pt-0.5 font-mono text-[11px] tracking-wider text-muted">
-                        {padIndex(idx)}
+                        {String(idx + 1).padStart(2, '0')}
                       </span>
                       <span className="text-[15px] leading-relaxed text-secondary">{item}</span>
                     </li>
                   ))}
                 </ol>
-              ) : (
-                <p className="text-sm text-muted">No structured change list was extracted from the source.</p>
-              )}
-            </section>
+              </section>
+            ) : null}
 
-            <section>
-              <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                Entities
-              </h2>
-              {entities.length > 0 ? (
-                <p className="max-w-[58ch] text-[14px] leading-relaxed text-secondary">
-                  {entities.join(' · ')}
-                </p>
-              ) : (
-                <p className="text-sm text-muted">None extracted.</p>
-              )}
-            </section>
-          </div>
-
-          <aside className="lg:sticky lg:top-8 lg:self-stretch">
-            <section className="flex h-full min-h-[28rem] flex-col rounded-lg border border-line bg-elevated p-6 lg:p-7">
-              <h2 className="mb-6 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                Evidence
-              </h2>
-              <div className="flex flex-1 flex-col gap-7">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                    Primary source
-                  </p>
-                  <p className="mt-2 text-[15px] font-medium text-ink">{sourceName}</p>
-                  {displayTime ? (
-                    <p className="mt-1 text-[13px] text-muted">{displayTime}</p>
-                  ) : null}
-                </div>
-
-                {officialHref ? (
-                  <a
-                    href={officialHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={`${primaryLabel}: ${sourceName}`}
-                    className="inline-flex w-fit items-center gap-2 text-sm font-medium text-accent transition-colors hover:text-accent"
-                  >
-                    {primaryLabel}
-                    <span aria-hidden="true">↗</span>
-                  </a>
-                ) : (
-                  <p className="text-sm text-muted">No source URL.</p>
-                )}
-
-                {citations.length > 0 ? (
-                  <div className="border-t border-line pt-6">
-                    <p className="mb-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-success">
-                      Verified quotes
-                    </p>
-                    <ul className="space-y-4">
-                      {citations.map((citation: string, idx: number) => (
-                        <li
-                          key={idx}
-                          className="border-l-2 border-success/40 pl-3.5 text-[14px] leading-relaxed text-secondary"
-                        >
-                          {citation}
-                        </li>
+            {entities.length > 0 ? (
+              <section aria-labelledby="entities">
+                <h2 id="entities" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+                  Who is involved
+                </h2>
+                <ul className="flex max-w-[64ch] flex-wrap gap-2">
+                  {entities.slice(0, ENTITY_PREVIEW).map((entity) => (
+                    <EntityChip key={entity} name={entity} />
+                  ))}
+                </ul>
+                {entities.length > ENTITY_PREVIEW ? (
+                  <details className="mt-2 max-w-[64ch]">
+                    <summary className="w-fit cursor-pointer text-[13px] text-muted hover:text-ink">
+                      {entities.length - ENTITY_PREVIEW} more mentioned
+                    </summary>
+                    <ul className="mt-2 flex flex-wrap gap-2">
+                      {entities.slice(ENTITY_PREVIEW).map((entity) => (
+                        <EntityChip key={entity} name={entity} />
                       ))}
                     </ul>
-                  </div>
-                ) : (
-                  <div className="border-t border-line pt-6">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                      Source available
-                    </p>
-                    <p className="mt-2 text-sm leading-relaxed text-muted">
-                      Evidence verification unavailable.
-                    </p>
-                  </div>
-                )}
-              </div>
+                  </details>
+                ) : null}
+              </section>
+            ) : null}
+
+            {related.length > 0 ? (
+              <section aria-labelledby="related">
+                <h2 id="related" className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+                  Related developments
+                </h2>
+                <ul>
+                  {related.map((item) => (
+                    <li key={item.id} className="border-b border-line py-3 last:border-b-0">
+                      <p className="text-[12px] text-muted">
+                        {[item.reason, item.category, formatUtcWhen(item.event_time)].filter(Boolean).join(' · ')}
+                      </p>
+                      <Link href={`/events/${item.id}`} className="mt-0.5 block text-[15px] leading-snug text-ink hover:text-accent">
+                        {item.headline}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </div>
+
+          <aside className="min-w-0 space-y-5 lg:sticky lg:top-6 lg:self-start" aria-label="Evidence">
+            <section className="rounded-md border border-line bg-surface p-5">
+              <SideHeading>Source</SideHeading>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary">{sourceLabel}</p>
+              <p className="mt-1 text-[15px] font-medium text-ink">{source?.name ?? 'Unknown source'}</p>
+              {displayTime ? <p className="mt-0.5 text-[13px] text-muted">Published {displayTime}</p> : null}
+              {discoveredVia ? <p className="mt-0.5 text-[13px] text-muted">Found via {discoveredVia}</p> : null}
+              {sourceHref ? (
+                <a
+                  href={sourceHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`${OPEN_LABEL[sourceLabel] ?? 'Open source'}: ${source?.name ?? 'source'} (opens in a new tab)`}
+                  className="mt-3 inline-flex w-fit items-center gap-1.5 text-sm font-medium text-accent hover:underline"
+                >
+                  {OPEN_LABEL[sourceLabel] ?? 'Open source'}
+                  <span aria-hidden="true">↗</span>
+                </a>
+              ) : (
+                <p className="mt-3 text-sm text-muted">No source URL was recorded.</p>
+              )}
+              {!hasOfficialEvidence ? (
+                <p className="mt-4 border-t border-line pt-3 text-[12px] leading-relaxed text-muted">
+                  No official announcement was among the collected sources. That does not mean one
+                  does not exist.
+                </p>
+              ) : null}
             </section>
 
-            {supporting.length > 0 ? (
-              <section className="mt-5 rounded-lg border border-line bg-elevated p-6">
-                <h2 className="mb-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                  Supporting sources
-                </h2>
+            <section className="rounded-md border border-line bg-surface p-5">
+              <SideHeading>Canonical event</SideHeading>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
+                <dt className="text-muted">Articles</dt>
+                <dd className="text-secondary">{Math.max(linked.length, 1)}</dd>
+                <dt className="text-muted">Publishers</dt>
+                <dd className="text-secondary">{Math.max(publishers.size, 1)}</dd>
+                <dt className="text-muted">First recorded</dt>
+                <dd className="text-secondary">{firstSeen}</dd>
+              </dl>
+              <p className="mt-3 text-[12px] leading-relaxed text-muted">
+                {linked.length > 1
+                  ? 'Reports of the same development are merged into this one event and kept below as evidence.'
+                  : 'One article reports this development so far. Later reports of it are merged here.'}
+              </p>
+            </section>
+
+            {citations.length > 0 ? (
+              <section className="rounded-md border border-line bg-surface p-5">
+                <SideHeading>Quoted from the source</SideHeading>
                 <ul className="space-y-3">
-                  {supporting.map(
-                    (
-                      article: {
-                        title: string;
-                        url: string;
-                        source_name: string;
-                        source_tier?: string;
-                        link_type: string;
-                      },
-                      idx: number,
-                    ) => {
-                      const href = safeHttpUrl(article.url);
-                      const label = evidenceLabel({
-                        url: href,
-                        tier: article.source_tier,
-                      });
-                      return (
-                        <li key={idx} className="flex flex-col gap-0.5">
-                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink0">
-                            {label}
-                          </span>
-                          {href ? (
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              aria-label={`${label}: ${article.source_name}`}
-                              className="text-sm text-accent hover:text-accent"
-                            >
-                              {article.source_name}
-                            </a>
-                          ) : (
-                            <span className="text-sm text-muted">{article.source_name}</span>
-                          )}
-                          <span className="line-clamp-1 text-[12px] text-ink0">{article.title}</span>
-                        </li>
-                      );
-                    },
-                  )}
+                  {citations.map((citation, idx) => (
+                    <li
+                      key={idx}
+                      className="border-l-2 border-success/40 pl-3 text-[14px] leading-relaxed text-secondary"
+                    >
+                      {citation}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            {supporting.length > 0 ? (
+              <section className="rounded-md border border-line bg-surface p-5">
+                <SideHeading>Supporting coverage</SideHeading>
+                <ul className="space-y-3.5">
+                  {supporting.map((article, idx) => {
+                    const href = safeHttpUrl(article.url);
+                    const label = evidenceLabel({ url: href, tier: article.source_tier });
+                    const when = published(article.published_at);
+                    return (
+                      <li key={`${article.url}-${idx}`} className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                          {label}
+                          {when ? <span className="font-normal normal-case tracking-normal"> · {when}</span> : null}
+                        </p>
+                        {href ? (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`${label}: ${article.source_name}, ${article.title} (opens in a new tab)`}
+                            className="mt-0.5 block text-sm text-accent hover:underline"
+                          >
+                            {article.source_name}
+                            <span aria-hidden="true"> ↗</span>
+                          </a>
+                        ) : (
+                          <span className="mt-0.5 block text-sm text-secondary">{article.source_name}</span>
+                        )}
+                        <p className="line-clamp-2 text-[12px] leading-snug text-muted">{article.title}</p>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             ) : null}
