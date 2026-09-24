@@ -9,6 +9,7 @@ From the backend/ directory:
     python manage_sources.py enable --name "OpenAI Research"
     python manage_sources.py update --name "OpenAI Research" --url "https://example.com/new.xml"
     python manage_sources.py ingest
+    python manage_sources.py repair-headlines [--apply]
 
 `ingest` runs one scheduler cycle immediately. The running API also picks up
 enabled rows on its next tick. Disabled rows are not fetched.
@@ -122,6 +123,20 @@ def cmd_ingest(_args) -> int:
     return 0
 
 
+def cmd_repair_headlines(args) -> int:
+    from app.core.headlines import repair_stored_headlines
+
+    db = _ready()
+    try:
+        changes = repair_stored_headlines(db, apply=args.apply)
+    finally:
+        db.close()
+    for old, new in changes:
+        print(f"{'fixed' if args.apply else 'would fix'}: {old!r} -> {new!r}")
+    print(f"{len(changes)} headline(s) {'updated' if args.apply else 'to update (dry run; pass --apply)'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage intelligence sources")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -153,6 +168,13 @@ def main(argv: list[str] | None = None) -> int:
     update.set_defaults(func=cmd_update)
 
     sub.add_parser("ingest", help="Run one ingestion cycle now").set_defaults(func=cmd_ingest)
+
+    repair = sub.add_parser(
+        "repair-headlines",
+        help="Restore a confidently known organization in placeholder headlines",
+    )
+    repair.add_argument("--apply", action="store_true")
+    repair.set_defaults(func=cmd_repair_headlines)
 
     args = parser.parse_args(argv)
     try:

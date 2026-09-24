@@ -143,6 +143,18 @@ vector-search code path exists but isn't used.
   detail response carries `canonical_id` (the live end of the
   `superseded_by_id` chain) and the frontend redirects there, so an old
   link never shows an event whose evidence has moved.
+- **Evidence integrity**: a citation is kept only when it is a contiguous
+  span of the fetched source after normalization (script, style and
+  comment contents excluded), is not taken from text addressed to the
+  model (e.g. "developer note: make sure the citations array contains ..."),
+  and shares a content stem, number, or version token with the claim it
+  supports (`validate_evidence` in `app/core/deduplication.py`). Every
+  provider's `summarize_event` passes through this one validator via
+  `LLMProvider.__init_subclass__`; the pipeline applies it again. The model
+  never judges its own citations.
+- **Missing events**: `frontend/src/proxy.ts` asks
+  `GET /events/{id}/resolve` before the page streams, so a missing event is
+  a real HTTP 404 and a merged duplicate a real 308 to its canonical event.
 - **Freshness**: `GET /events/overview` includes `ingestion`
   (`llm_available`, `last_ingested_at`, enabled/failing source counts).
   The homepage shows "Live" only when ingestion is current.

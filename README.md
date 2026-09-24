@@ -72,6 +72,7 @@ python -m pytest -q -m "not live_nvidia"
 cd frontend
 npx tsc --noEmit
 npm run lint
+npm test
 npm run build
 ```
 
@@ -87,6 +88,8 @@ python manage_sources.py disable --name "OpenAI Research"
 python manage_sources.py enable --name "OpenAI Research"
 python manage_sources.py update --name "OpenAI Research" --url "https://example.com/new.xml"
 python manage_sources.py ingest
+python manage_sources.py repair-headlines          # dry run
+python manage_sources.py repair-headlines --apply  # keeps the original in importance_reasoning
 ```
 
 `ingest` runs one cycle immediately. Otherwise the running scheduler picks up an enabled row on the next tick. Disabled rows are not fetched. Re-running `seed_sources.py` updates curated URLs and does not re-enable a source you disabled.

@@ -59,11 +59,22 @@ function freshness(ingestion: IngestionStatus | undefined, nowMs: number): Fresh
         : 'No language model is configured. Showing stored developments.',
     };
   }
+  const pending = ingestion.pending_enrichment ?? 0;
+  const stored = pending > 0
+    ? ` ${pending} new ${pending === 1 ? 'article is' : 'articles are'} stored and will appear once enrichment resumes.`
+    : '';
+  if (ingestion.enrichment_paused) {
+    return {
+      state: 'paused',
+      label: 'Enrichment paused',
+      detail: `The language model provider is not responding.${stored}`,
+    };
+  }
   if (age === null || age > STALE_AFTER_HOURS) {
     return {
       state: 'delayed',
       label: 'Updates delayed',
-      detail: stamp ? `Last new development recorded ${stamp}.` : 'No development has been recorded yet.',
+      detail: (stamp ? `Last new development recorded ${stamp}.` : 'No development has been recorded yet.') + stored,
     };
   }
   return {

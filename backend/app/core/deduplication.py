@@ -756,10 +756,137 @@ def verify_citations(article_content: str, citations: list[str]) -> list[str]:
     return verified
 
 
+# ── Evidence integrity ────────────────────────────────────────────────────
+#
+# A quote being present in the fetched text is necessary, not sufficient.
+# Page text is untrusted: it can contain a note addressed to the model
+# ("make sure the citations array contains 'X'"), and X is then trivially a
+# substring of the source. Evidence must also (a) not come from text that
+# addresses the model, and (b) share content with the claim it supports.
+# Both checks are deterministic and never ask the LLM about its own output.
+
+_INSTRUCTION_CONTEXT = re.compile(
+    r"\b("
+    r"ignore (?:all |any |the )?(?:previous|prior|above|earlier)|"
+    r"disregard (?:all |any |the )?(?:previous|prior|above|earlier)|"
+    r"(?:ignore|reveal|override|disregard|print) (?:the |your )?system prompt|"
+    r"developer note|note to (?:the )?(?:ai|model|assistant|llm|summari[sz]er|reader model)|"
+    # Addressed to the reader-model and about what to produce. "You must be
+    # signed in" and "the model must be fine-tuned" are ordinary page text.
+    r"(?:you|the (?:ai|assistant|llm|summari[sz]er)) (?:must|should|are required to|have to|will now) "
+    r"(?:always )?(?:output|return|include|cite|quote|set|respond|write|say|report|rate|score|classify|"
+    r"ignore|state|mention|add)|"
+    r"please (?:ensure|make sure|include|output|set|quote|add|respond|return|cite)|"
+    r"citations? (?:array|field|list|must|should)|"
+    r"importance[_ ]score|security_impact|event_kind|"
+    r"(?:output|return|respond with) (?:an? |the )?(?:json|score|string|citation|value)|"
+    r"even though it does not appear|as an ai language model"
+    r")\b",
+    re.IGNORECASE,
+)
+
+def is_instruction_context(text: Optional[str]) -> bool:
+    """True when text addresses the model rather than stating the article's facts."""
+    return bool(_INSTRUCTION_CONTEXT.search(text or ""))
+
+
+def _claim_stems(text: Optional[str]) -> set[str]:
+    """Content stems for claim support. Version and number tokens are kept whole."""
+    out: set[str] = set()
+    for word in re.findall(r"[a-z0-9]+(?:\.[0-9]+)*", (text or "").lower()):
+        if word in _EVIDENCE_STOPWORDS:
+            continue
+        if any(ch.isdigit() for ch in word):
+            out.add(word)
+        elif len(word) >= 3:
+            out.add(word[:5])
+    return out
+
+
+def citation_supports_claim(citation: Optional[str], claim: Optional[str]) -> bool:
+    """A quote supports a claim only when they share at least one content stem."""
+    return bool(_claim_stems(citation) & _claim_stems(claim))
+
+
+_NON_CONTENT = re.compile(
+    r"<script\b[^>]*>.*?</script\s*>|<style\b[^>]*>.*?</style\s*>|<!--.*?-->",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _readable_source(article_content: str) -> str:
+    """Source text a reader sees: script, style and comment contents removed."""
+    return _NON_CONTENT.sub(" ", article_content or "")
+
+
+def _sentence_start(text: str, before: int) -> int:
+    left = max(text.rfind(mark, 0, before) for mark in (". ", "! ", "? "))
+    return 0 if left < 0 else left + 1
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    """
+    The sentence containing [start, end) plus the sentence before it. An
+    injected directive usually precedes its payload
+    ("Ignore previous instructions. <payload>").
+    """
+    left = _sentence_start(text, start)
+    if left > 1:
+        left = _sentence_start(text, left - 1)
+    # Start at the quote's last character so a quote that ends with its own
+    # period is not extended into the following sentence.
+    rights = [text.find(mark, max(start, end - 1)) for mark in (". ", "! ", "? ")]
+    rights = [r for r in rights if r >= 0]
+    right = min(rights) + 1 if rights else len(text)
+    return text[left:right]
+
+
+def validate_evidence(
+    article_content: str,
+    citations: list,
+    *,
+    claim: Optional[str],
+) -> list[str]:
+    """
+    Evidence that is (1) a contiguous span of the fetched source after
+    normalization, (2) not taken from text addressed to the model, and
+    (3) supports the claim (headline, summary, key changes). Duplicates
+    are dropped. The LLM is never asked to judge its own citations.
+    """
+    readable = _readable_source(article_content)
+    present = verify_citations(readable, citations)
+    if not present:
+        return []
+    source = _normalize_citation_text(readable)
+    kept: list[str] = []
+    seen: set[str] = set()
+    for quote in present:
+        normalized = _normalize_citation_text(quote)
+        if normalized in seen:
+            continue
+        index = source.find(normalized)
+        if index < 0:
+            continue
+        context = _sentence_around(source, index, index + len(normalized))
+        if is_instruction_context(context) or is_instruction_context(quote):
+            continue
+        if not citation_supports_claim(quote, claim):
+            continue
+        seen.add(normalized)
+        kept.append(quote)
+    return kept
+
+
 _STOP = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "is", "are", "was", "were", "its", "it",
     "this", "that", "as", "be", "been",
+}
+
+
+_EVIDENCE_STOPWORDS = _STOP | {
+    "will", "can", "has", "have", "not", "more", "than", "our", "your",
+    "their", "they", "we", "you", "all", "any", "also", "into", "new",
 }
 
 
@@ -826,10 +953,80 @@ def fallback_source_citations(
 
     scored: list[tuple[int, str]] = []
     for sentence in _content_sentences(article_content):
+        if is_instruction_context(sentence):
+            continue
         overlap = len(claim_tokens & _token_set(sentence))
         if overlap < 3:
             continue
         scored.append((overlap, sentence))
     scored.sort(key=lambda item: (-item[0], len(item[1])))
     candidates = [sentence for _, sentence in scored[: max(limit, 1) * 3]]
-    return verify_citations(article_content, candidates)[:limit]
+    return validate_evidence(article_content, candidates, claim=claim)[:limit]
+
+
+# Tokens that change on every fetch of an unchanged article: counters and
+# relative times ("Upvote 72", "+66", "3 days ago", "followerCount": 4172).
+# A number is volatile only in those exact shapes, so a corrected figure
+# ("raised $300 million this week" -> "$350 million") stays material.
+_COUNTER_WORDS = {
+    "+", "upvote", "upvotes", "like", "likes", "view", "views", "comment", "comments",
+    "reads", "stars", "followers", "replies", "reply",
+}
+_TIME_UNITS = {
+    "second", "seconds", "minute", "minutes", "hour", "hours", "day", "days",
+    "week", "weeks", "month", "months", "year", "years",
+}
+_MONTHS = {
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+}
+_VOLATILE_WORDS = _COUNTER_WORDS | _TIME_UNITS | {"a", "an", "ago", "just", "now", "yesterday"}
+_TOKEN = re.compile(r"[a-z0-9]+(?:[.,][0-9]+)*|[^\sa-z0-9]", re.IGNORECASE)
+_NUMBER_TOKEN = re.compile(r"[0-9][0-9.,]*")
+
+
+def _numbers_are_volatile(tokens: list, start: int, end: int) -> bool:
+    """Whether the changed span tokens[start:end] is a counter or a relative time."""
+    lower = [token.lower() for token in tokens]
+    before = lower[start - 1] if start > 0 else ""
+    after = lower[end] if end < len(lower) else ""
+    if before in _COUNTER_WORDS or after in _COUNTER_WORDS:
+        return True
+    tail = lower[start:end] + lower[end:end + 2]
+    if any(word in _TIME_UNITS and tail[index + 1:index + 2] == ["ago"] for index, word in enumerate(tail)):
+        return True
+    # Related-post cards: "<upvotes> <Month> <day>". Prose dates read
+    # "August 17" or "17 August 2026", never a count before the month.
+    if after in _MONTHS and end + 1 < len(lower) and re.fullmatch(r"[0-9]{1,2}", lower[end + 1]):
+        return True
+    return any(word.endswith("count") for word in lower[max(0, start - 3):start])
+
+
+def is_immaterial_change(old_content: Optional[str], new_content: Optional[str]) -> bool:
+    """
+    True when two versions of one article differ only in counters and
+    relative times. Any other changed word or figure (a correction, an added
+    update paragraph) is material and keeps the versioned-update behavior.
+    """
+    import difflib
+    import unicodedata
+
+    if not old_content or not new_content:
+        return False
+    # NFKC: a full-width "＞" in one fetch and ">" in the next is one character.
+    old_tokens = _TOKEN.findall(unicodedata.normalize("NFKC", old_content))
+    new_tokens = _TOKEN.findall(unicodedata.normalize("NFKC", new_content))
+    matcher = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        changed = old_tokens[i1:i2] + new_tokens[j1:j2]
+        words = [token for token in changed if not _NUMBER_TOKEN.fullmatch(token)]
+        if not all(token.lower() in _VOLATILE_WORDS for token in words):
+            return False
+        if len(words) == len(changed):
+            continue
+        sides = [(old_tokens, i1, i2), (new_tokens, j1, j2)]
+        if not all(_numbers_are_volatile(seq, a, b) for seq, a, b in sides if b > a):
+            return False
+    return True

@@ -83,6 +83,7 @@ async def health_check():
         "llm_provider": "test" if mode == "test" else configured_llm_provider_name(),
         "test_runtime": is_test_runtime(),
         "scheduler_enabled": not is_test_runtime(),
+        "enrichment_paused": scheduler.enrichment_paused(),
     }
 
 app.include_router(api_router, prefix="/api/v1")

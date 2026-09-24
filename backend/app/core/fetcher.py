@@ -31,6 +31,26 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 
 from app.core.urls import is_blocked_ip, sanitize_http_url
 
+import ssl
+
+# One verifying TLS context for every fetch. httpx builds a new context per
+# Client by default, re-reading the whole CA bundle each time (about 1s per
+# request on a machine that scans file reads). Verification is unchanged:
+# the same certifi bundle, CERT_REQUIRED, and hostname checking.
+_TLS_CONTEXT = None
+_TLS_LOCK = threading.Lock()
+
+
+def tls_context() -> ssl.SSLContext:
+    global _TLS_CONTEXT
+    if _TLS_CONTEXT is None:
+        with _TLS_LOCK:
+            if _TLS_CONTEXT is None:
+                import certifi
+
+                _TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+    return _TLS_CONTEXT
+
 logger = logging.getLogger(__name__)
 
 MAX_RESPONSE_BYTES = 2_000_000
@@ -231,7 +251,7 @@ def fetch_url(url: str, timeout: int = 15, max_redirects: int = 5) -> httpx.Resp
     }
 
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=False, verify=tls_context()) as client:
             for _ in range(max_redirects + 1):
                 sanitized = sanitize_http_url(current_url, keep_query=True)
                 if not sanitized:

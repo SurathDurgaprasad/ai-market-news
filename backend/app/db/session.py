@@ -36,6 +36,8 @@ def ensure_sqlite_columns(bind=None) -> None:
         ("event", "official_source_name", "VARCHAR"),
         ("event", "mentioned_entities", "JSON"),
         ("article", "publisher_name", "VARCHAR"),
+        ("article", "enrichment_status", "VARCHAR"),
+        ("article", "enrichment_error", "VARCHAR"),
     )
     with target.begin() as conn:
         for table, column, coltype in statements:
@@ -43,6 +45,11 @@ def ensure_sqlite_columns(bind=None) -> None:
             names = {row[1] for row in info}
             if info and column not in names:
                 conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        info = conn.exec_driver_sql("PRAGMA table_info(article)").fetchall()
+        if info:
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_article_enrichment_status ON article (enrichment_status)"
+            )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

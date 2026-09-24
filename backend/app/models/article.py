@@ -17,6 +17,13 @@ class Article(Base):
     hash = Column(String, index=True, nullable=True)
     image_url = Column(String, nullable=True)
     publisher_name = Column(String, nullable=True)
+    # NULL: processed (legacy rows and every enriched article).
+    # "pending": fetched and stored durably, but LLM enrichment has not run
+    #   yet (provider outage). Retried later; never shown as an event.
+    # "rejected" / "duplicate": a retried pending article that enrichment
+    #   rejected, so it is not retried again.
+    enrichment_status = Column(String, nullable=True, index=True)
+    enrichment_error = Column(String, nullable=True)
 
     source = relationship("Source", back_populates="articles")
     event_links = relationship("EventArticle", back_populates="article")

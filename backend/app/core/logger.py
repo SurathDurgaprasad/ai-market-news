@@ -35,6 +35,14 @@ _REDACTIONS: list[tuple[re.Pattern, str]] = [
 ]
 
 
+def redact_secrets(text: str) -> str:
+    """The same credential redaction, for strings stored outside the log (e.g. DB error fields)."""
+    redacted = text or ""
+    for pattern, replacement in _REDACTIONS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
 class RedactSecretsFilter(logging.Filter):
     """
     Rewrites `record.msg`/`record.args` so no configured handler can ever

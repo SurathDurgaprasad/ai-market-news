@@ -323,3 +323,41 @@ def test_news_outlet_is_not_shown_as_the_subject_organization():
     official = _market("Lab ships a tokenizer", kind="tool_update", tier="primary", org="Hugging Face",
                        source="Hugging Face Blog")
     assert _display_organization(official) == "Hugging Face"
+
+
+def test_pending_articles_are_counted_but_never_shown_as_events(client):
+    from app.models.article import Article
+
+    db = _Session()
+    source = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    db.add(Article(
+        id=uuid.uuid4(),
+        source_id=source.id,
+        url="https://lab.example.com/post",
+        title="Lab ships a model",
+        raw_content="Body text of the stored article.",
+        hash="pending-hash",
+        enrichment_status="pending",
+        enrichment_error="LLM unavailable",
+    ))
+    db.commit()
+    db.close()
+
+    overview = client.get("/api/v1/events/overview").json()
+    assert overview["ingestion"]["pending_enrichment"] == 1
+    assert overview["ingestion"]["enrichment_paused"] is False
+    assert client.get("/api/v1/events/?scope=week").json() == []
+
+
+def test_resolve_reports_missing_and_canonical_events(client):
+    db = _Session()
+    source = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    canonical = _event(db, source, headline="Lab introduces Model 5")
+    merged = _event(db, source, headline="Model 5 introduced", superseded_by_id=canonical.id)
+    canonical_id, merged_id = str(canonical.id), str(merged.id)
+    db.close()
+
+    assert client.get(f"/api/v1/events/{canonical_id}/resolve").json()["canonical_id"] == canonical_id
+    assert client.get(f"/api/v1/events/{merged_id}/resolve").json()["canonical_id"] == canonical_id
+    assert client.get(f"/api/v1/events/{uuid.uuid4()}/resolve").status_code == 404
+    assert client.get("/api/v1/events/not-a-uuid/resolve").status_code == 404

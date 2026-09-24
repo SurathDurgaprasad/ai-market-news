@@ -36,12 +36,42 @@ LLM_UNAVAILABLE`), the entire cycle returns early with
 `{"blocked": "llm_unavailable", ...}` before touching any source — the
 system does not partially ingest with a broken/absent LLM.
 
-If the provider fails *during* a cycle (timeouts, outage), that source is
-marked `degraded` and the remaining due sources are deferred to the next
-cycle: they are not fetched, their failure counters are untouched, and
-they are marked `degraded` with "LLM unavailable; ingestion deferred" so
-the admin view does not show them as healthy. Without this, every later
-source would wait out the provider's full deadline in turn.
+Fetch/parse and LLM enrichment are separate stages. If the configured
+provider fails *during* a cycle (timeout, outage):
+
+- The article being processed is stored as an `article` row with
+  `enrichment_status = "pending"` and a redacted `enrichment_error`. No
+  event is created: nothing semantic exists without the LLM.
+- The provider is not called again for `PROVIDER_OUTAGE_COOLDOWN`
+  (15 minutes). The rest of the cycle, and later cycles inside the
+  cooldown, keep fetching every due source in store-only mode.
+- A source whose fetch succeeded is never marked failing for this. It is
+  `degraded` with "N article(s) stored, awaiting enrichment", and its
+  normal polling interval applies.
+- When the cooldown has passed, each cycle first retries up to
+  `PENDING_RETRY_LIMIT` (20) pending articles, oldest first, in place on
+  the same row, then processes new articles. A retried article that
+  enrichment rejects is marked `rejected` and not retried again.
+- `article.url` is unique, and a re-fetched pending URL is recognized, so
+  repeated outage cycles never create a second row.
+
+An unconfigured provider (no key) is a configuration error, not an
+outage: the cycle stays blocked before fetching, as above.
+
+Same-URL updates: a re-fetched article whose text changed creates a new
+event version only when the change is material. Counters and relative
+times ("Upvote 72", "+66", "3 days ago", `"followerCount": 4172`,
+related-post cards "19 August 17") and Unicode width variants are
+immaterial (`is_immaterial_change`); any other changed word or figure is
+material. The new text is compared with every stored version of the URL.
+Without this, feeds whose pages carry live counters (the Hugging Face
+blog) were re-summarized on every poll, which filled whole cycles with
+LLM calls and produced no new developments.
+
+Fetches reuse one verifying TLS context (`fetcher.tls_context()`); httpx
+otherwise re-reads the CA bundle for every request.
+`GET /events/overview` reports `pending_enrichment` and
+`enrichment_paused`; `/api/health` reports `enrichment_paused`.
 
 After the sources, `consolidate_safe_duplicates` merges live events the
 headline predicates treat as one development. It compares only events

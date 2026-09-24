@@ -506,11 +506,20 @@ def _ingestion_status(db: Session) -> dict:
     )
     enabled = db.query(Source).filter(Source.enabled.is_(True)).all()
     failing = sum(1 for source in enabled if (source.health_status or "").lower() == "failing")
+    from app.core.pipeline import ENRICHMENT_PENDING
+    from app.core.scheduler import scheduler
+
+    pending = db.query(func.count(Article.id)).filter(
+        Article.enrichment_status == ENRICHMENT_PENDING
+    ).scalar() or 0
     return {
         "llm_available": resolve_llm_mode() != LLM_UNAVAILABLE,
         "last_ingested_at": _iso_utc(last_ingested),
         "sources_enabled": len(enabled),
         "sources_failing": failing,
+        # Articles fetched and stored but not yet enriched into events.
+        "pending_enrichment": int(pending),
+        "enrichment_paused": scheduler.enrichment_paused(),
     }
 
 
@@ -597,6 +606,24 @@ def _related_events(db: Session, event: Event, limit: int = 5) -> List[RelatedEv
         ))
     scored.sort(key=lambda item: item[0])
     return [item[1] for item in scored[:limit]]
+
+
+@router.get("/{event_id}/resolve")
+def resolve_event(event_id: str, db: Session = Depends(get_db)):
+    """
+    Cheap existence check for the frontend proxy, run before a page streams
+    so a missing event can return a real 404 and a merged duplicate a real
+    redirect. One indexed lookup plus the supersession chain.
+    """
+    try:
+        event_uuid = uuid_module.UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Event not found")
+    event = db.query(Event).filter(Event.id == event_uuid).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    canonical = _canonical_of(db, event) if event.superseded_by_id is not None else event
+    return {"id": str(event.id), "canonical_id": str(canonical.id)}
 
 
 @router.get("/{event_id}", response_model=EventResponse)

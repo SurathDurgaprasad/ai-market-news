@@ -144,13 +144,15 @@ def test_provider_outage_does_not_retry_every_remaining_article(db_session):
     )
 
 
-def test_provider_outage_defers_the_remaining_sources_in_the_cycle(db_session):
+def test_provider_outage_keeps_fetching_other_sources_in_store_only_mode(db_session):
     """
-    One confirmed outage must not cost every later source its own full
-    provider deadline. The rest of the cycle is deferred, and deferred
-    sources are not marked failing or fetched.
+    One confirmed outage stops provider calls for the rest of the cycle, but
+    every due source is still fetched and its new articles stored as pending.
+    Fetch success is not a failure; the sources are degraded, not failing.
     """
     from app.core.parser import ArticleData
+    from app.models.article import Article
+    from app.models.event import Event
 
     first = Source(name="Outage A", url="https://a.example.com/rss", enabled=True, type="rss")
     second = Source(name="Outage B", url="https://b.example.com/rss", enabled=True, type="rss")
@@ -168,28 +170,36 @@ def test_provider_outage_defers_the_remaining_sources_in_the_cycle(db_session):
             self.llm = _OutageLLMProvider()
             providers.append(self.llm)
 
-    articles = [
-        ArticleData(
-            title="Article",
-            url="https://a.example.com/post",
-            content="This article has enough characters to pass the minimum length validation check in the pipeline.",
-        )
-    ]
+    def feed_for(url):
+        resp = MagicMock()
+        resp.text = url
+        return resp
+
+    def articles_for(text):
+        host = text.split("//")[1].split("/")[0]
+        return [
+            ArticleData(
+                title=f"Article {index} from {host}",
+                url=f"https://{host}/post-{index}",
+                content=f"Distinct body {index} from {host}. " * 6,
+            )
+            for index in range(2)
+        ]
+
     scheduler = IngestionScheduler()
     with patch("app.core.scheduler.SessionLocal", return_value=db_session):
-        with patch("app.core.fetcher.fetch_url") as mock_fetch:
-            resp = MagicMock()
-            resp.text = "<rss></rss>"
-            mock_fetch.return_value = resp
-            with patch("app.core.parser.parse_rss_feed", return_value=articles):
+        with patch("app.core.fetcher.fetch_url", side_effect=feed_for) as mock_fetch:
+            with patch("app.core.parser.parse_rss_feed", side_effect=articles_for):
                 with patch("app.core.pipeline.IntelligencePipeline", Capture):
                     scheduler.run_ingestion_cycle()
 
-    assert mock_fetch.call_count == 1
+    assert mock_fetch.call_count == 3  # conftest's source plus A and B
     assert sum(provider.calls for provider in providers) == 1
+    assert db_session.query(Event).count() == 0
+    pending = db_session.query(Article).filter(Article.enrichment_status == "pending").count()
+    assert pending == 6
     db_session.expire_all()
-    statuses = {
-        row.id: row.health_status
-        for row in db_session.query(Source).filter(Source.id.in_(ids)).all()
-    }
-    assert set(statuses.values()) == {"degraded"}
+    rows = db_session.query(Source).filter(Source.id.in_(ids)).all()
+    assert {row.health_status for row in rows} == {"degraded"}
+    assert all(row.consecutive_failures == 0 for row in rows)
+    assert all(row.last_fetch_at is not None for row in rows)

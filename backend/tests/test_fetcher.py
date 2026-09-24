@@ -178,3 +178,15 @@ def test_read_body_with_cap_aborts_on_cumulative_size_across_multiple_chunks():
     resp.iter_bytes.return_value = iter([chunk] * chunks_needed)
     with pytest.raises(ValueError, match="too large"):
         _read_body_with_cap(resp)
+
+
+def test_fetches_share_one_verifying_tls_context():
+    """Built once, never weakened: certificate and hostname checks stay on."""
+    import ssl
+
+    from app.core.fetcher import tls_context
+
+    context = tls_context()
+    assert context is tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True

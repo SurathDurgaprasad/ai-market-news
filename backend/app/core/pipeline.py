@@ -15,7 +15,8 @@ from app.core.runtime import is_test_runtime
 from app.core.deduplication import (
     normalize_url,
     generate_content_hash,
-    verify_citations,
+    is_immaterial_change,
+    validate_evidence,
     fallback_source_citations,
     classify_headline_relationship,
     titles_are_safe_lexical_match,
@@ -34,10 +35,14 @@ from app.core.importance import (
     kinds_are_compatible,
 )
 from app.core.entities import select_primary_entities
+from app.core.headlines import restore_headline_organization
 from app.core.origin import resolve_originating_source
 from app.core.article_body import enrich_article, MIN_CONTENT_CHARS
 
 logger = logging.getLogger(__name__)
+
+ENRICHMENT_PENDING = "pending"
+
 
 class IntelligencePipeline:
     def __init__(self, db: Session, llm_env: Optional[str] = None):
@@ -46,6 +51,88 @@ class IntelligencePipeline:
         self.llm = get_llm_provider(env=llm_env)
         logger.info("pipeline llm=%s mode=%s", type(self.llm).__name__, self.llm_mode)
         self.last_outcome: Optional[str] = None
+        # False during a provider outage: articles are fetched, deduplicated
+        # and stored as pending, but the LLM is not called and no event is
+        # created. Nothing semantic is produced without the LLM.
+        self.enrichment_enabled = True
+        self._pending_ctx: Optional[dict] = None
+
+    def process_article(
+        self,
+        article_data: 'ArticleData',
+        source_id: str,
+        fetch_fn: Optional[Callable] = None,
+        pending_article_id=None,
+    ) -> Optional[Event]:
+        """
+        Runs the full ingestion pipeline for a single article.
+        Returns the canonical Event this article was clustered into.
+        last_outcome is one of: created, linked, duplicate, rejected,
+        pending (stored, enrichment deferred), llm_unavailable.
+
+        When the LLM is unavailable the article is stored as pending before
+        LlmUnavailableError propagates, so an outage never loses it.
+        pending_article_id retries a stored pending article in place.
+        """
+        self._pending_ctx = None
+        try:
+            result = self._process_article(article_data, source_id, fetch_fn, pending_article_id)
+        except LlmUnavailableError as exc:
+            self.last_outcome = "llm_unavailable"
+            self.db.rollback()
+            self._store_pending(str(exc))
+            raise
+        if pending_article_id is not None and self.last_outcome in ("rejected", "duplicate"):
+            self._close_pending(pending_article_id, self.last_outcome)
+        return result
+
+    def _store_pending(self, reason: str) -> None:
+        """Persist the fetched article so enrichment can be retried. Never creates an event."""
+        ctx = self._pending_ctx
+        if not ctx:
+            return
+        from app.core.logger import redact_secrets
+
+        # Provider exception text can echo request details; never store credentials.
+        reason = redact_secrets(reason or "enrichment unavailable")[:300]
+        try:
+            existing = self.db.query(Article).filter(Article.url == ctx["url"]).first()
+            if existing is not None:
+                if existing.enrichment_status == ENRICHMENT_PENDING:
+                    existing.enrichment_error = reason
+                    self.db.commit()
+                return
+            self.db.add(Article(
+                source_id=ctx["source_id"],
+                url=ctx["url"],
+                title=ctx["title"],
+                raw_content=ctx["content"],
+                body_excerpt=ctx["content"][:497] + "..." if len(ctx["content"]) > 500 else ctx["content"],
+                published_at=ctx["published_at"],
+                hash=ctx["hash"],
+                image_url=sanitize_http_url(ctx["image_url"], keep_query=True) or None,
+                publisher_name=ctx["publisher_name"],
+                enrichment_status=ENRICHMENT_PENDING,
+                enrichment_error=reason,
+            ))
+            self.db.commit()
+            logger.info("PENDING [enrichment deferred] %s (%s)", ctx["url"], reason[:80])
+        except IntegrityError:
+            self.db.rollback()
+        except Exception as exc:
+            self.db.rollback()
+            logger.error("Could not store pending article %s: %s", ctx.get("url"), exc)
+
+    def _close_pending(self, article_id, outcome: str) -> None:
+        """A retried pending article that enrichment rejected is not retried again."""
+        try:
+            row = self.db.query(Article).filter(Article.id == article_id).first()
+            if row is not None and row.enrichment_status == ENRICHMENT_PENDING:
+                row.enrichment_status = outcome
+                row.enrichment_error = None
+                self.db.commit()
+        except Exception:
+            self.db.rollback()
 
     def _release_db(self) -> None:
         """End the current transaction so SQLite is not held across NVIDIA/LLM calls."""
@@ -55,17 +142,13 @@ class IntelligencePipeline:
         except Exception:
             self.db.rollback()
 
-    def process_article(
+    def _process_article(
         self,
         article_data: 'ArticleData',
         source_id: str,
         fetch_fn: Optional[Callable] = None,
+        pending_article_id=None,
     ) -> Optional[Event]:
-        """
-        Runs the full ingestion pipeline for a single article.
-        Returns the canonical Event this article was clustered into.
-        last_outcome is one of: created, linked, duplicate, rejected, llm_unavailable.
-        """
         from app.models.event import EventArticle
 
         self.last_outcome = "rejected"
@@ -73,8 +156,15 @@ class IntelligencePipeline:
         if article_data is None:
             return None
 
+        pending_article = None
+        if pending_article_id is not None:
+            pending_article = self.db.query(Article).filter(Article.id == pending_article_id).first()
+            if pending_article is None or pending_article.enrichment_status != ENRICHMENT_PENDING:
+                self.last_outcome = "duplicate"
+                return None
+
         # 1. Normalize
-        url = normalize_url(article_data.url)
+        url = pending_article.url if pending_article is not None else normalize_url(article_data.url)
         title = article_data.title
         content = article_data.content or ""
 
@@ -96,14 +186,20 @@ class IntelligencePipeline:
         fetch_publisher = bool(
             ingest_row and is_aggregator_source(ingest_row.name, ingest_row.url)
         )
-        content, image_url, publisher_name = enrich_article(
-            title,
-            url,
-            content,
-            article_data.image_url,
-            fetch_fn=fetch_fn,
-            fetch_publisher=fetch_publisher,
-        )
+        if pending_article is not None:
+            # Already fetched and enriched when it was stored; never refetch.
+            content = pending_article.raw_content or ""
+            image_url = pending_article.image_url
+            publisher_name = pending_article.publisher_name
+        else:
+            content, image_url, publisher_name = enrich_article(
+                title,
+                url,
+                content,
+                article_data.image_url,
+                fetch_fn=fetch_fn,
+                fetch_publisher=fetch_publisher,
+            )
 
         # 2. Validate minimum content length
         stripped_content = content.strip()
@@ -114,16 +210,62 @@ class IntelligencePipeline:
             
         # 3. Deduplicate - Exact URL or Exact Content Hash
         content_hash = generate_content_hash(content)
-        existing_article_by_url = self.db.query(Article).filter(Article.url == url).first()
-        
+        if pending_article is not None:
+            existing_article_by_url = None
+        else:
+            existing_article_by_url = self.db.query(Article).filter(Article.url == url).first()
+
         is_same_url_update = False
         original_event_id_to_supersede = None
-        
+
+        if existing_article_by_url is not None and existing_article_by_url.enrichment_status == ENRICHMENT_PENDING:
+            # Seen again in the feed while waiting for enrichment. The stored
+            # row is retried by the scheduler; a second row is never created.
+            logger.debug(f"SKIP [already stored, enrichment pending]: {url}")
+            self.last_outcome = "pending"
+            return None
+
+        if pending_article is not None and "#update-" in url:
+            # A stored same-URL update: supersede the live version of the original.
+            is_same_url_update = True
+            base = self.db.query(Article).filter(Article.url == url.split("#update-")[0]).first()
+            base_link = (
+                self.db.query(EventArticle).filter(EventArticle.article_id == base.id).first()
+                if base is not None else None
+            )
+            if base_link:
+                candidate = self._live_event(
+                    self.db.query(Event).filter(Event.id == base_link.event_id).first()
+                )
+                if candidate:
+                    original_event_id_to_supersede = candidate.id
+
         if existing_article_by_url:
             if existing_article_by_url.hash == content_hash:
                 logger.debug(f"SKIP [exact duplicate, hash unchanged]: {url}")
                 self.last_outcome = "duplicate"
                 return None  # Exact duplicate, nothing changed
+            # Compared with every stored version of this URL (bounded):
+            # ingested_at has one-second resolution, so "latest" is not
+            # reliably orderable, and text matching any known version
+            # carries no new information.
+            known_versions = (
+                self.db.query(Article.hash, Article.raw_content)
+                .filter((Article.url == url) | Article.url.like(f"{url}#update-%"))
+                .order_by(Article.ingested_at.desc())
+                .limit(10)
+                .all()
+            )
+            if any(
+                known_hash == content_hash or is_immaterial_change(known_content, content)
+                for known_hash, known_content in known_versions
+            ):
+                # Page chrome such as vote counts and "3 days ago" changes on
+                # every fetch. Re-summarizing it would create a new version,
+                # spend two LLM calls, and look like a new development.
+                logger.debug(f"SKIP [immaterial change at same URL]: {url}")
+                self.last_outcome = "duplicate"
+                return None
             else:
                 # The content at this URL has changed — ingest as an update
                 # and flag it to supersede the original event.
@@ -146,7 +288,10 @@ class IntelligencePipeline:
                     if candidate:
                         original_event_id_to_supersede = candidate.id
 
-        existing_article_by_hash = self.db.query(Article).filter(Article.hash == content_hash).first()
+        hash_query = self.db.query(Article).filter(Article.hash == content_hash)
+        if pending_article is not None:
+            hash_query = hash_query.filter(Article.id != pending_article.id)
+        existing_article_by_hash = hash_query.first()
         if existing_article_by_hash:
             logger.debug(f"SKIP [syndicated duplicate, content already ingested]: {url}")
             self.last_outcome = "duplicate"
@@ -186,10 +331,29 @@ class IntelligencePipeline:
                     )
                     break
 
+        # Everything the article needs to be stored durably if enrichment
+        # cannot run now. Deterministic work above (dedup, fast merge) is done.
+        self._pending_ctx = {
+            "url": url,
+            "title": title,
+            "content": content,
+            "hash": content_hash,
+            "published_at": article_data.published_at,
+            "image_url": image_url,
+            "publisher_name": publisher_name,
+            "source_id": source_id,
+        }
+
         # 5. Classify First (To get entities if not matched yet)
         classification = None
         summary = None
         verified_citations = []
+        if not matched_event and not self.enrichment_enabled:
+            self._release_db()
+            if pending_article is None:
+                self._store_pending("LLM unavailable; enrichment deferred")
+            self.last_outcome = "pending"
+            return None
         if not matched_event:
             self._release_db()
             try:
@@ -358,7 +522,14 @@ class IntelligencePipeline:
                     raise LlmUnavailableError(f"summarize_event failed: {type(exc).__name__}: {exc}") from exc
                     
                 raw_citations = summary.citations if summary else []
-                verified_citations = verify_citations(content, raw_citations)
+                claim = " ".join(
+                    part for part in (
+                        getattr(summary, "headline", None) if summary else None,
+                        summary.short_summary if summary else None,
+                        summary.what_changed if summary else None,
+                    ) if part
+                )
+                verified_citations = validate_evidence(content, raw_citations, claim=claim)
                 if not verified_citations and summary is not None:
                     verified_citations = fallback_source_citations(
                         content,
@@ -372,6 +543,27 @@ class IntelligencePipeline:
                     len(verified_citations),
                     getattr(self.llm, "_json_mode", None),
                 )
+                if summary is not None and summary.headline:
+                    # A generated "Startup raises ..." regains the name the
+                    # publisher's own title uses, when that name is certain.
+                    publishers = [publisher_name]
+                    if ingest_row is not None:
+                        publishers.append(ingest_row.name)
+                        if ingest_row.organization is not None:
+                            publishers.append(ingest_row.organization.name)
+                    restored = restore_headline_organization(
+                        summary.headline,
+                        source_title=title,
+                        content=content,
+                        entities=(
+                            list(getattr(classification, "primary_entities", None) or [])
+                            + list(classification.entities or [])
+                        ),
+                        publisher_names=[name for name in publishers if name],
+                    )
+                    if restored != summary.headline:
+                        logger.info("HEADLINE [organization restored] %r -> %r", summary.headline, restored)
+                        summary.headline = restored
 
         if not matched_event and summary is not None and getattr(summary, "headline", None):
             from datetime import datetime, timedelta, timezone
@@ -416,24 +608,35 @@ class IntelligencePipeline:
             try:
                 # Persist new article (Evidence) inside the retry loop
                 excerpt = content[:497] + "..." if len(content) > 500 else content
-                new_article = Article(
-                    source_id=source_id,
-                    url=url,
-                    title=title,
-                    raw_content=content,
-                    body_excerpt=excerpt,
-                    published_at=article_data.published_at,
-                    hash=generate_content_hash(content),
-                    image_url=sanitize_http_url(image_url, keep_query=True) or None,
-                    publisher_name=publisher_name,
-                )
-                try:
-                    self.db.add(new_article)
-                    self.db.flush() # flush to get ID and ACQUIRE SQLite WRITE LOCK
-                except IntegrityError:
-                    self.db.rollback()
-                    self.last_outcome = "duplicate"
-                    return None # Race condition caught, article already ingested by another worker
+                if pending_article is not None:
+                    # Promote the stored row; it is the same article, not a new one.
+                    new_article = self.db.query(Article).filter(Article.id == pending_article.id).first()
+                    if new_article is None or new_article.enrichment_status != ENRICHMENT_PENDING:
+                        self.db.rollback()
+                        self.last_outcome = "duplicate"
+                        return None
+                    new_article.enrichment_status = None
+                    new_article.enrichment_error = None
+                    self.db.flush()
+                else:
+                    new_article = Article(
+                        source_id=source_id,
+                        url=url,
+                        title=title,
+                        raw_content=content,
+                        body_excerpt=excerpt,
+                        published_at=article_data.published_at,
+                        hash=generate_content_hash(content),
+                        image_url=sanitize_http_url(image_url, keep_query=True) or None,
+                        publisher_name=publisher_name,
+                    )
+                    try:
+                        self.db.add(new_article)
+                        self.db.flush() # flush to get ID and ACQUIRE SQLite WRITE LOCK
+                    except IntegrityError:
+                        self.db.rollback()
+                        self.last_outcome = "duplicate"
+                        return None # Race condition caught, article already ingested by another worker
                 
                 # Now that we hold the write lock, do one FINAL semantic check.
                 # While we were waiting for the lock, another worker might have inserted the Event.

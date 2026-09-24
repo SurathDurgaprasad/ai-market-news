@@ -32,6 +32,12 @@ POLLING_INTERVAL_MINUTES = {
 }
 TICK_MINUTES = 5
 MAX_BACKOFF_MINUTES = 240  # 4 hours
+# After a provider outage is observed, the provider is not called again
+# until this has passed. Sources are still fetched and new articles stored
+# as pending, so one dead provider costs one deadline, not one per article.
+PROVIDER_OUTAGE_COOLDOWN = timedelta(minutes=15)
+# Pending articles retried per cycle once the provider is reachable.
+PENDING_RETRY_LIMIT = 20
 
 
 def polling_interval_minutes(source: Source) -> int:
@@ -76,6 +82,74 @@ def is_rss_source(source_type: Optional[str]) -> bool:
 class IngestionScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
+        self.provider_outage_until: Optional[datetime] = None
+
+    def enrichment_paused(self, now: Optional[datetime] = None) -> bool:
+        return not self._enrichment_allowed(_as_utc(now) or datetime.now(timezone.utc))
+
+    def _enrichment_allowed(self, now: datetime) -> bool:
+        return self.provider_outage_until is None or now >= self.provider_outage_until
+
+    def _mark_provider_outage(self, now: datetime, reason) -> None:
+        self.provider_outage_until = now + PROVIDER_OUTAGE_COOLDOWN
+        logger.error(
+            "LLM provider unavailable (%s); enrichment paused until %s. "
+            "Sources keep being fetched; new articles are stored as pending.",
+            str(reason)[:200],
+            self.provider_outage_until.isoformat(),
+        )
+
+    def retry_pending_enrichment(self, now: datetime) -> bool:
+        """
+        Enrich stored pending articles, oldest first, bounded per cycle.
+        Returns False if the provider failed again (outage continues).
+        """
+        from app.core.parser import ArticleData
+        from app.core.pipeline import ENRICHMENT_PENDING, IntelligencePipeline
+        from app.core.providers.llm import LlmUnavailableError
+        from app.models.article import Article
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(Article.id, Article.source_id)
+                .filter(Article.enrichment_status == ENRICHMENT_PENDING)
+                .order_by(Article.ingested_at.asc())
+                .limit(PENDING_RETRY_LIMIT)
+                .all()
+            )
+            if not rows:
+                return True
+            pipeline = IntelligencePipeline(db)
+            outcomes: dict = {}
+            for article_id, source_id in rows:
+                row = db.query(Article).filter(Article.id == article_id).first()
+                if row is None:
+                    continue
+                data = ArticleData(
+                    title=row.title,
+                    url=row.url,
+                    content=row.raw_content or "",
+                    published_at=row.published_at,
+                    image_url=row.image_url,
+                )
+                try:
+                    pipeline.process_article(data, source_id, pending_article_id=article_id)
+                except LlmUnavailableError as exc:
+                    db.rollback()
+                    self._mark_provider_outage(now, exc)
+                    logger.info("pending retry stopped by outage: %s", outcomes)
+                    return False
+                except Exception as exc:
+                    db.rollback()
+                    logger.error("pending retry failed for article=%s: %s", article_id, exc)
+                    continue
+                outcome = pipeline.last_outcome or "rejected"
+                outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            logger.info("pending retry outcomes: %s", outcomes)
+            return True
+        finally:
+            db.close()
 
     def start(self):
         self.scheduler.add_job(
@@ -143,15 +217,18 @@ class IngestionScheduler:
             finally:
                 db_master.close()
 
-            # Circuit breaker: once the provider is confirmed down in this
-            # cycle, the remaining sources are left due for the next cycle
-            # instead of each waiting out the provider's full deadline.
-            provider_down = False
-            deferred: list = []
+            # Fetch/parse and LLM enrichment are separate. When the provider
+            # is down, sources are still fetched and new articles stored as
+            # pending (no LLM call, no event); they are enriched on recovery.
+            enrichment = self._enrichment_allowed(now)
+            if enrichment:
+                enrichment = self.retry_pending_enrichment(now)
+            else:
+                logger.warning(
+                    "Enrichment paused until %s; fetching sources in store-only mode",
+                    self.provider_outage_until.isoformat() if self.provider_outage_until else "?",
+                )
             for source_id, s_name, s_url, s_type in source_targets:
-                if provider_down:
-                    deferred.append(source_id)
-                    continue
                 db = SessionLocal()
                 try:
                     source = db.query(Source).filter(Source.id == source_id).first()
@@ -192,9 +269,9 @@ class IngestionScheduler:
                         logger.info("Parsed %s articles from %s", len(articles), s_name)
 
                         pipeline = IntelligencePipeline(db)
+                        pipeline.enrichment_enabled = enrichment
                         discovered = len(articles)
-                        created = linked = rejected = duplicates = llm_errors = 0
-                        llm_blocked = False
+                        created = linked = rejected = duplicates = llm_errors = pending = 0
                         for article_data in articles:
                             try:
                                 pipeline.process_article(article_data, source_id)
@@ -205,18 +282,21 @@ class IngestionScheduler:
                                     linked += 1
                                 elif outcome == "duplicate":
                                     duplicates += 1
-                                elif outcome == "llm_unavailable":
-                                    llm_errors += 1
-                                    llm_blocked = True
-                                    break
+                                elif outcome == "pending":
+                                    pending += 1
                                 else:
                                     rejected += 1
                             except LlmUnavailableError as llm_err:
+                                # The pipeline already stored this article as
+                                # pending. Stop calling the provider; keep
+                                # fetching and storing the rest.
                                 logger.error("LLM unavailable while processing %s: %s", s_name, llm_err)
                                 llm_errors += 1
-                                llm_blocked = True
+                                pending += 1
                                 db.rollback()
-                                break
+                                enrichment = False
+                                pipeline.enrichment_enabled = False
+                                self._mark_provider_outage(now, llm_err)
                             except Exception as art_err:
                                 logger.error(f"Failed to process article in {s_name}: {art_err}")
                                 rejected += 1
@@ -224,7 +304,8 @@ class IngestionScheduler:
 
                         summary = (
                             f"discovered={discovered} created={created} linked={linked} "
-                            f"rejected={rejected} duplicates={duplicates} llm_errors={llm_errors}"
+                            f"rejected={rejected} duplicates={duplicates} pending={pending} "
+                            f"llm_errors={llm_errors}"
                         )
                         logger.info(
                             "ingest source=%s %s interval_min=%s",
@@ -236,16 +317,19 @@ class IngestionScheduler:
                         source = db.query(Source).filter(Source.id == source_id).first()
                         if source:
                             source.last_ingest_summary = summary[:500]
-                            if llm_blocked:
-                                provider_down = True
+                            # The fetch itself succeeded either way: not a failure.
+                            source.last_fetch_at = func.now()
+                            source.consecutive_failures = 0
+                            if pending:
+                                # Not healthy either: articles are stored but
+                                # not yet enriched into events.
                                 source.health_status = "degraded"
-                                source.last_error_info = "LLM unavailable; ingestion blocked"
-                                source.last_failure_at = func.now()
+                                source.last_error_info = (
+                                    f"LLM unavailable; {pending} article(s) stored, awaiting enrichment"
+                                )
                             else:
                                 source.health_status = "healthy"
-                                source.last_fetch_at = func.now()
                                 source.last_error_info = None
-                                source.consecutive_failures = 0
                             db.commit()
 
                     except Exception as source_err:
@@ -260,24 +344,6 @@ class IngestionScheduler:
                             db.commit()
                 except Exception as inner_err:
                     logger.error(f"Critical error handling source {s_name}: {inner_err}")
-                finally:
-                    db.close()
-            if deferred:
-                logger.warning(
-                    "LLM provider unavailable; deferred %s remaining source(s) to the next cycle",
-                    len(deferred),
-                )
-                # Not fetched and not failing, but also not healthy: the
-                # admin view must show that these were not ingested.
-                db = SessionLocal()
-                try:
-                    for source in db.query(Source).filter(Source.id.in_(deferred)).all():
-                        source.health_status = "degraded"
-                        source.last_error_info = "LLM unavailable; ingestion deferred"
-                    db.commit()
-                except Exception as defer_err:
-                    logger.error("Could not record deferred sources: %s", defer_err)
-                    db.rollback()
                 finally:
                     db.close()
 

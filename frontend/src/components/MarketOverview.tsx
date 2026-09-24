@@ -56,6 +56,8 @@ export type IngestionStatus = {
   last_ingested_at: string | null;
   sources_enabled: number;
   sources_failing: number;
+  pending_enrichment?: number;
+  enrichment_paused?: boolean;
 };
 
 export type MarketOverviewData = {
