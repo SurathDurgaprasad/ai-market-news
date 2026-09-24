@@ -88,11 +88,40 @@ def _prefer_main_html(html: str) -> str:
         cleaned,
         flags=re.IGNORECASE | re.DOTALL,
     )
+    # A post-body container is more specific than <main>, which on many
+    # blogs (Hugging Face) also wraps upvotes, "More Articles" and comments.
+    body = _content_container(cleaned)
+    if body is not None:
+        return body
     for tag in ("article", "main"):
         match = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", cleaned, re.IGNORECASE | re.DOTALL)
         if match and len(re.sub(r"<[^>]+>", "", match.group(1)).strip()) >= MIN_CONTENT_CHARS:
             return match.group(1)
     return cleaned
+
+
+_CONTENT_CLASS = re.compile(
+    r"<(div|section)\b[^>]*\bclass=[\"'][^\"']*\b(?:blog-content|post-content|article-body|"
+    r"article-content|entry-content|post-body|story-body)\b[^\"']*[\"'][^>]*>",
+    re.IGNORECASE,
+)
+_DIV_EDGE = re.compile(r"<(/?)(div|section)\b[^>]*>", re.IGNORECASE)
+
+
+def _content_container(html: str) -> Optional[str]:
+    """Inner HTML of the first recognised post-body element, balanced across nested divs."""
+    opening = _CONTENT_CLASS.search(html)
+    if not opening:
+        return None
+    depth = 1
+    for edge in _DIV_EDGE.finditer(html, opening.end()):
+        depth += -1 if edge.group(1) else 1
+        if depth == 0:
+            inner = html[opening.end():edge.start()]
+            if len(re.sub(r"<[^>]+>", "", inner).strip()) >= MIN_CONTENT_CHARS:
+                return inner
+            return None
+    return None
 
 
 def enrich_article(

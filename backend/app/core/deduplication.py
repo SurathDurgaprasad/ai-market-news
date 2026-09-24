@@ -803,6 +803,11 @@ def _claim_stems(text: Optional[str]) -> set[str]:
     return out
 
 
+def claim_stems(text: Optional[str]) -> set[str]:
+    """Public: content stems, numbers and version tokens of a text."""
+    return _claim_stems(text)
+
+
 def citation_supports_claim(citation: Optional[str], claim: Optional[str]) -> bool:
     """A quote supports a claim only when they share at least one content stem."""
     return bool(_claim_stems(citation) & _claim_stems(claim))
@@ -992,6 +997,8 @@ def _numbers_are_volatile(tokens: list, start: int, end: int) -> bool:
     after = lower[end] if end < len(lower) else ""
     if before in _COUNTER_WORDS or after in _COUNTER_WORDS:
         return True
+    if any(word in _COUNTER_WORDS for word in lower[start:end]):
+        return True  # the span is itself a counter, e.g. "Upvote 72"
     tail = lower[start:end] + lower[end:end + 2]
     if any(word in _TIME_UNITS and tail[index + 1:index + 2] == ["ago"] for index, word in enumerate(tail)):
         return True
@@ -1000,6 +1007,11 @@ def _numbers_are_volatile(tokens: list, start: int, end: int) -> bool:
     if after in _MONTHS and end + 1 < len(lower) and re.fullmatch(r"[0-9]{1,2}", lower[end + 1]):
         return True
     return any(word.endswith("count") for word in lower[max(0, start - 3):start])
+
+
+def _is_boundary_token(token: str) -> bool:
+    """Punctuation that appears when surrounding text is removed."""
+    return not any(ch.isalnum() for ch in token)
 
 
 def is_immaterial_change(old_content: Optional[str], new_content: Optional[str]) -> bool:
@@ -1017,9 +1029,22 @@ def is_immaterial_change(old_content: Optional[str], new_content: Optional[str])
     old_tokens = _TOKEN.findall(unicodedata.normalize("NFKC", old_content))
     new_tokens = _TOKEN.findall(unicodedata.normalize("NFKC", new_content))
     matcher = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk=False)
+    from app.core.article_body import MAX_CONTENT_CHARS
+
+    # Stored bodies are cut at MAX_CONTENT_CHARS. When either side hit the
+    # cap, a difference touching the end is where the cut fell, not an edit.
+    truncated = max(len(old_content), len(new_content)) >= MAX_CONTENT_CHARS - 1
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
+        if truncated and (i2 == len(old_tokens) or j2 == len(new_tokens)):
             continue
+        if tag in ("equal", "delete"):
+            # Text only removed (page chrome, comments, embedded data that a
+            # cleaner extraction no longer includes) carries no new fact.
+            continue
+        if tag == "replace":
+            removed = {token.lower() for token in old_tokens[i1:i2]}
+            if all(token.lower() in removed or _is_boundary_token(token) for token in new_tokens[j1:j2]):
+                continue  # a shorter or reordered remnant of what was there
         changed = old_tokens[i1:i2] + new_tokens[j1:j2]
         words = [token for token in changed if not _NUMBER_TOKEN.fullmatch(token)]
         if not all(token.lower() in _VOLATILE_WORDS for token in words):

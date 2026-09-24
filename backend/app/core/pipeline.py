@@ -16,6 +16,7 @@ from app.core.deduplication import (
     normalize_url,
     generate_content_hash,
     is_immaterial_change,
+    claim_stems,
     validate_evidence,
     fallback_source_citations,
     classify_headline_relationship,
@@ -42,6 +43,11 @@ from app.core.article_body import enrich_article, MIN_CONTENT_CHARS
 logger = logging.getLogger(__name__)
 
 ENRICHMENT_PENDING = "pending"
+# LLM relationship checks per incoming article, over the most similar candidates.
+MAX_RELATIONSHIP_CHECKS = 5
+# How long a known article is still re-fetched to look for material edits.
+from datetime import timedelta as _timedelta
+UPDATE_RECHECK_WINDOW = _timedelta(days=7)
 
 
 class IntelligencePipeline:
@@ -134,6 +140,30 @@ class IntelligencePipeline:
         except Exception:
             self.db.rollback()
 
+    def _settled_known_url(self, url: str) -> bool:
+        """
+        A processed article older than UPDATE_RECHECK_WINDOW is not fetched
+        again to look for edits. Feeds list the same 100 posts on every poll;
+        re-downloading months-old pages each cycle was hundreds of fetches.
+        """
+        from datetime import datetime, timezone
+
+        known = (
+            self.db.query(Article.published_at, Article.ingested_at, Article.enrichment_status)
+            .filter(Article.url == url)
+            .first()
+        )
+        if known is None or known.enrichment_status == ENRICHMENT_PENDING:
+            return False
+        # Watched for edits for a window after we first stored it, however old
+        # its publication date: a newly discovered old post is still checked.
+        reference = known.ingested_at or known.published_at
+        if reference is None:
+            return False
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - reference > UPDATE_RECHECK_WINDOW
+
     def _release_db(self) -> None:
         """End the current transaction so SQLite is not held across NVIDIA/LLM calls."""
         try:
@@ -174,6 +204,11 @@ class IntelligencePipeline:
 
         if is_obvious_noise(title, content):
             logger.info(f"REJECT [deterministic noise]: {url}")
+            return None
+
+        if pending_article is None and self._settled_known_url(url):
+            # Known and older than the update window: not re-downloaded.
+            self.last_outcome = "duplicate"
             return None
 
         if fetch_fn is None and not is_test_runtime():
@@ -415,11 +450,25 @@ class IntelligencePipeline:
 
             # 6. Semantic Clustering (Using extracted entities and LLM validation)
             checked_candidate_ids = set()
+            relationship_calls = {"count": 0}
+            incoming_stems = claim_stems(f"{title} {content[:600]}")
+            incoming_entities = {entity.lower() for entity in classification.entities or []}
+
+            def candidate_affinity(candidate) -> tuple:
+                """How much a candidate shares beyond one common entity (deterministic)."""
+                text = f"{candidate.headline or ''} {candidate.short_summary or ''}"
+                shared_words = len(incoming_stems & claim_stems(text))
+                shared_entities = len(incoming_entities & {e.lower() for e in (candidate.entities or []) if isinstance(e, str)})
+                return (shared_words + shared_entities, shared_words)
 
             def find_semantic_match():
                 if is_same_url_update or not classification.entities:
                     return None
                 recent_events = self.db.query(Event).filter(Event.created_at >= forty_eight_hours_ago).order_by(Event.created_at.desc()).limit(50).all()
+                # Most similar first, then at most MAX_RELATIONSHIP_CHECKS LLM
+                # calls per article. Sharing only "OpenAI" used to send an
+                # article to the LLM against up to 22 events, one ~30s call each.
+                recent_events.sort(key=candidate_affinity, reverse=True)
                 for candidate in recent_events:
                     if candidate.superseded_by_id or candidate.id in checked_candidate_ids:
                         continue
@@ -457,6 +506,10 @@ class IntelligencePipeline:
                         existing = "\n".join(
                             part for part in (candidate.headline or "", candidate.short_summary or "") if part
                         )
+                        if relationship_calls["count"] >= MAX_RELATIONSHIP_CHECKS:
+                            logger.info("RELATIONSHIP [check budget reached] %s", url)
+                            return None
+                        relationship_calls["count"] += 1
                         self._release_db()
                         try:
                             rel_result = self.llm.classify_relationship(content, existing, context=context_hint)

@@ -68,8 +68,27 @@ Without this, feeds whose pages carry live counters (the Hugging Face
 blog) were re-summarized on every poll, which filled whole cycles with
 LLM calls and produced no new developments.
 
+Text only removed between versions (page chrome that a cleaner extraction
+no longer includes) is also immaterial; added or replaced words are not.
+
 Fetches reuse one verifying TLS context (`fetcher.tls_context()`); httpx
 otherwise re-reads the CA bundle for every request.
+
+Article pages: `_prefer_main_html` takes a recognised post-body container
+(`blog-content`, `post-content`, `article-body`, `entry-content`, ...)
+before `<article>`/`<main>`, and `sanitize_html` strips tags in linear
+time while honouring quoted attribute values, so JSON in `data-*`
+attributes never becomes article text.
+
+Semantic merge: an incoming article is compared by the LLM only with the
+`MAX_RELATIONSHIP_CHECKS` (5) most similar recent events, ranked by shared
+content words and entities. Previously one article that shared only
+"OpenAI" with many events could make 22 sequential relationship calls.
+
+Data repairs (dry run by default, reversible):
+`manage_sources.py repair-versions` restores the first-recorded time on
+versions created only by page counters; `repair-headlines` restores a
+confidently known organization in placeholder headlines.
 `GET /events/overview` reports `pending_enrichment` and
 `enrichment_paused`; `/api/health` reports `enrichment_paused`.
 

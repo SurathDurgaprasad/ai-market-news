@@ -90,6 +90,7 @@ python manage_sources.py update --name "OpenAI Research" --url "https://example.
 python manage_sources.py ingest
 python manage_sources.py repair-headlines          # dry run
 python manage_sources.py repair-headlines --apply  # keeps the original in importance_reasoning
+python manage_sources.py repair-versions            # dry run; --apply to repair
 ```
 
 `ingest` runs one cycle immediately. Otherwise the running scheduler picks up an enabled row on the next tick. Disabled rows are not fetched. Re-running `seed_sources.py` updates curated URLs and does not re-enable a source you disabled.

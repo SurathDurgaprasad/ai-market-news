@@ -184,3 +184,64 @@ def consolidate_safe_duplicates(db: Session, now: datetime | None = None) -> int
     if merged:
         db.commit()
     return merged
+
+
+def _primary_article(db: Session, event: Event):
+    from app.models.article import Article
+
+    return (
+        db.query(Article)
+        .join(EventArticle, EventArticle.article_id == Article.id)
+        .filter(EventArticle.event_id == event.id, EventArticle.link_type == "primary")
+        .first()
+    )
+
+
+def repair_churn_versions(db: Session, *, apply: bool = False) -> list[tuple[str, int]]:
+    """
+    Live versions created only because a page's counters or relative times
+    changed (before is_immaterial_change existed) are not new developments.
+    Their created_at is restored to when the development was first recorded,
+    so freshness and "new" counts are not inflated. The version itself,
+    its evidence and its headline are kept. With apply, the replaced
+    created_at is kept in importance_reasoning["churn_created_at"].
+    Returns (headline, version) for each repaired event.
+    """
+    from app.core.deduplication import is_immaterial_change
+
+    repaired: list[tuple[str, int]] = []
+    live = db.query(Event).filter(Event.superseded_by_id.is_(None), Event.version > 1).all()
+    for event in live:
+        chain = []
+        current = event
+        for _ in range(50):
+            previous = (
+                db.query(Event)
+                .filter(Event.superseded_by_id == current.id)
+                .order_by(Event.version.desc())
+                .first()
+            )
+            if previous is None:
+                break
+            chain.append(previous)
+            current = previous
+        if not chain:
+            continue
+        mine, before = _primary_article(db, event), _primary_article(db, chain[0])
+        if mine is None or before is None:
+            continue
+        if not is_immaterial_change(before.raw_content, mine.raw_content):
+            continue
+        # Earliest record of the development, skipping churn-only steps.
+        root = chain[-1]
+        if event.created_at is None or root.created_at is None or event.created_at <= root.created_at:
+            continue
+        repaired.append((event.headline, event.version))
+        if apply:
+            reasoning = dict(event.importance_reasoning) if isinstance(event.importance_reasoning, dict) else {}
+            reasoning.setdefault("churn_created_at", event.created_at.isoformat())
+            event.importance_reasoning = reasoning
+            event.created_at = root.created_at
+    if apply and repaired:
+        db.commit()
+    return repaired

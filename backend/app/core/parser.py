@@ -34,6 +34,61 @@ class ArticleData:
         self.published_at = published_at
         self.image_url = image_url
 
+_TAG_STOP = re.compile(r"""[>"']""")
+
+
+def _strip_tags(text: str) -> str:
+    """
+    Replace markup with spaces, honouring quoted attribute values, in linear
+    time. A quoted value may legally contain ">" (JSON props carrying
+    "<p>...</p>"); ending the tag at the first ">" leaked the rest of the
+    attribute into the article text. An unclosed quote falls back to the
+    first ">" so hostile input cannot make this quadratic.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    unclosed_after = {'"': n + 1, "'": n + 1}  # a quote char known absent after this index
+    while i < n:
+        start = text.find("<", i)
+        if start < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:start])
+        nxt = text[start + 1: start + 2]
+        if not (nxt.isalpha() or nxt in ("/", "!", "?")):
+            out.append("<")
+            i = start + 1
+            continue
+        k, end = start + 1, -1
+        while True:
+            stop = _TAG_STOP.search(text, k)
+            if stop is None:
+                break
+            char = stop.group(0)
+            if char == ">":
+                end = stop.start()
+                break
+            back = stop.start() - 1
+            while back > start and text[back] in " \t\r\n":
+                back -= 1
+            if text[back] != "=":
+                k = stop.start() + 1  # a stray apostrophe, not an attribute value
+                continue
+            close = -1 if stop.start() >= unclosed_after[char] else text.find(char, stop.start() + 1)
+            if close < 0:
+                unclosed_after[char] = min(unclosed_after[char], stop.start())
+                break
+            k = close + 1
+        if end < 0:
+            end = text.find(">", start)  # previous behaviour for malformed markup
+            if end < 0:
+                out.append(text[start:])
+                break
+        out.append(" ")
+        i = end + 1
+    return "".join(out)
+
+
 def sanitize_html(html_str: str) -> str:
     if not html_str:
         return ""
@@ -41,7 +96,10 @@ def sanitize_html(html_str: str) -> str:
     cleaned = re.sub(r'<style\b[^>]*>.*?</style>', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r'<noscript\b[^>]*>.*?</noscript>', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r'<!--.*?-->', '', cleaned, flags=re.DOTALL)
-    cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+    # Quote-aware: a quoted attribute value may legally contain ">" (for
+    # example JSON props carrying "<p>...</p>"). Ending the tag at the first
+    # ">" leaked the rest of the attribute into the article text.
+    cleaned = _strip_tags(cleaned)
     cleaned = html.unescape(cleaned)
     # Prevent XML breakout in LLM context and fake <system> tags
     cleaned = cleaned.replace('<', '＜').replace('>', '＞')

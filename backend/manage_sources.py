@@ -10,6 +10,7 @@ From the backend/ directory:
     python manage_sources.py update --name "OpenAI Research" --url "https://example.com/new.xml"
     python manage_sources.py ingest
     python manage_sources.py repair-headlines [--apply]
+    python manage_sources.py repair-versions [--apply]
 
 `ingest` runs one scheduler cycle immediately. The running API also picks up
 enabled rows on its next tick. Disabled rows are not fetched.
@@ -137,6 +138,20 @@ def cmd_repair_headlines(args) -> int:
     return 0
 
 
+def cmd_repair_versions(args) -> int:
+    from app.core.consolidate import repair_churn_versions
+
+    db = _ready()
+    try:
+        repaired = repair_churn_versions(db, apply=args.apply)
+    finally:
+        db.close()
+    for headline, version in repaired:
+        print(f"{'repaired' if args.apply else 'would repair'}: v{version} {headline!r}")
+    print(f"{len(repaired)} churn version(s) {'repaired' if args.apply else 'found (dry run; pass --apply)'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage intelligence sources")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -175,6 +190,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     repair.add_argument("--apply", action="store_true")
     repair.set_defaults(func=cmd_repair_headlines)
+
+    versions = sub.add_parser(
+        "repair-versions",
+        help="Restore first-recorded time on versions created only by page counters",
+    )
+    versions.add_argument("--apply", action="store_true")
+    versions.set_defaults(func=cmd_repair_versions)
 
     args = parser.parse_args(argv)
     try:
