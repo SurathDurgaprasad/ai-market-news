@@ -36,6 +36,7 @@ from app.core.importance import (
     kinds_are_compatible,
 )
 from app.core.entities import select_primary_entities
+from app.core.feed import is_feed_in_scope
 from app.core.headlines import restore_headline_organization
 from app.core.origin import resolve_originating_source
 from app.core.article_body import enrich_article, MIN_CONTENT_CHARS
@@ -43,6 +44,7 @@ from app.core.article_body import enrich_article, MIN_CONTENT_CHARS
 logger = logging.getLogger(__name__)
 
 ENRICHMENT_PENDING = "pending"
+ENRICHMENT_REJECTED = "rejected"
 # LLM relationship checks per incoming article, over the most similar candidates.
 MAX_RELATIONSHIP_CHECKS = 5
 # How long a known article is still re-fetched to look for material edits.
@@ -94,6 +96,17 @@ class IntelligencePipeline:
 
     def _store_pending(self, reason: str) -> None:
         """Persist the fetched article so enrichment can be retried. Never creates an event."""
+        self._store_article(ENRICHMENT_PENDING, reason)
+
+    def _store_rejected(self, reason: str) -> None:
+        """
+        Remember a rejected article so later polls skip it before any page
+        fetch or LLM call. Rejected articles were re-fetched and re-classified
+        on every poll because nothing recorded them. Never creates an event.
+        """
+        self._store_article(ENRICHMENT_REJECTED, reason)
+
+    def _store_article(self, status: str, reason: str) -> None:
         ctx = self._pending_ctx
         if not ctx:
             return
@@ -104,7 +117,7 @@ class IntelligencePipeline:
         try:
             existing = self.db.query(Article).filter(Article.url == ctx["url"]).first()
             if existing is not None:
-                if existing.enrichment_status == ENRICHMENT_PENDING:
+                if existing.enrichment_status == status:
                     existing.enrichment_error = reason
                     self.db.commit()
                 return
@@ -118,11 +131,11 @@ class IntelligencePipeline:
                 hash=ctx["hash"],
                 image_url=sanitize_http_url(ctx["image_url"], keep_query=True) or None,
                 publisher_name=ctx["publisher_name"],
-                enrichment_status=ENRICHMENT_PENDING,
+                enrichment_status=status,
                 enrichment_error=reason,
             ))
             self.db.commit()
-            logger.info("PENDING [enrichment deferred] %s (%s)", ctx["url"], reason[:80])
+            logger.info("%s [stored without event] %s (%s)", status.upper(), ctx["url"], reason[:80])
         except IntegrityError:
             self.db.rollback()
         except Exception as exc:
@@ -139,6 +152,12 @@ class IntelligencePipeline:
                 self.db.commit()
         except Exception:
             self.db.rollback()
+
+    def _known_rejected_url(self, url: str) -> bool:
+        status = (
+            self.db.query(Article.enrichment_status).filter(Article.url == url).scalar()
+        )
+        return status == ENRICHMENT_REJECTED
 
     def _settled_known_url(self, url: str) -> bool:
         """
@@ -204,6 +223,10 @@ class IntelligencePipeline:
 
         if is_obvious_noise(title, content):
             logger.info(f"REJECT [deterministic noise]: {url}")
+            return None
+
+        if pending_article is None and self._known_rejected_url(url):
+            self.last_outcome = "rejected"
             return None
 
         if pending_article is None and self._settled_known_url(url):
@@ -379,6 +402,23 @@ class IntelligencePipeline:
             "source_id": source_id,
         }
 
+        # General-tech aggregators (community tier, e.g. Hacker News) carry
+        # mostly non-AI stories that the week feed hides anyway
+        # (feed.is_feed_in_scope). Deciding before the LLM saves three calls
+        # per story. Curated and AI-category sources skip this check.
+        ingest_tier = (ingest_row.tier or "").lower() if ingest_row is not None else ""
+        if (
+            not matched_event
+            and ingest_tier == "community"
+            and not is_feed_in_scope(title, content[:600], ingest_tier)
+        ):
+            logger.info("REJECT [outside AI scope, no LLM call]: %s", url)
+            self._release_db()
+            if pending_article is None:
+                self._store_rejected("outside AI scope")
+            self.last_outcome = "rejected"
+            return None
+
         # 5. Classify First (To get entities if not matched yet)
         classification = None
         summary = None
@@ -419,6 +459,8 @@ class IntelligencePipeline:
             if not classification or score is None:
                 logger.info(f"REJECT [importance missing/zero or prompt injection]: {url}")
                 self.db.rollback()
+                if pending_article is None:
+                    self._store_rejected("classifier rejected: no usable importance")
                 return None
 
             kind = getattr(classification, "event_kind", None) or "other"
@@ -437,6 +479,8 @@ class IntelligencePipeline:
             if score is None:
                 logger.info(f"REJECT [importance missing/zero or prompt injection]: {url}")
                 self.db.rollback()
+                if pending_article is None:
+                    self._store_rejected("classifier rejected: no usable importance")
                 return None
             classification.importance_score = score
             classification.event_kind = kind

@@ -213,3 +213,41 @@ def test_one_failing_source_does_not_stop_a_larger_registry(db_session):
         assert elapsed < 45, f"40-source cycle took {elapsed:.1f}s"
     finally:
         server.shutdown()
+
+
+def test_changing_a_source_url_clears_the_old_urls_failure_history(db_session):
+    """A replaced dead feed must be fetched on the next tick, not after hours of backoff."""
+    from datetime import datetime, timezone
+
+    from app.core.scheduler import is_source_due
+
+    source, _ = upsert_source(
+        db_session, organization="Meta AI", name="Meta AI Research",
+        url="https://ai.meta.com/blog/rss", tier="primary", enabled=True, update_enabled=True,
+    )
+    source.health_status = "failing"
+    source.consecutive_failures = 4
+    source.last_failure_at = datetime.now(timezone.utc)
+    source.last_error_info = "Client error '404 Not Found'"
+    db_session.commit()
+    assert not is_source_due(source)
+
+    moved, action = upsert_source(
+        db_session, organization="Meta AI", name="Meta AI Research",
+        url="https://engineering.fb.com/category/ai-research/feed/", tier="primary", enabled=True,
+    )
+    db_session.commit()
+    assert action == "updated"
+    assert moved.consecutive_failures == 0
+    assert moved.last_error_info is None
+    assert moved.health_status == "healthy"
+    assert is_source_due(moved)
+
+    # Re-saving the same URL keeps real history.
+    moved.consecutive_failures = 2
+    db_session.commit()
+    again, _ = upsert_source(
+        db_session, organization="Meta AI", name="Meta AI Research",
+        url="https://engineering.fb.com/category/ai-research/feed/", tier="primary", enabled=True,
+    )
+    assert again.consecutive_failures == 2

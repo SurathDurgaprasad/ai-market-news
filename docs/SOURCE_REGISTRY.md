@@ -32,3 +32,23 @@ Repeated adds with the same organization and name update the existing row.
 ## What the feed does with them
 
 Primary and research sources are in scope for the week feed. Secondary and community items must read as AI developments. Conference-pass promotions are dropped. A bare mention of a GPU is not enough for a community post.
+
+## Disabled curated feeds (checked 2026-09-24)
+
+These are disabled in `sources.registry.json` because no public feed could
+be fetched. Alternate paths were probed with the production fetcher, and
+none returned a valid RSS/Atom feed. Re-enable one only after
+`manage_sources.py update --url ...` points it at a feed that validates.
+
+| Source | Result |
+|---|---|
+| Anthropic News | 404; no feed at `/rss.xml` or `/news/feed` |
+| DeepSeek Blog | 404; docs-site paths return HTML, not a feed |
+| Cohere Blog | HTML instead of a feed; `/rss.xml` and `/blog/feed` 404 |
+| Stability AI Blog | 404; Squarespace `?format=rss` returns no feed |
+| xAI Blog | 403/404 (automated clients blocked) |
+| Perplexity Blog | 403 (automated clients blocked) |
+| VentureBeat AI | rate-limited on every attempt (429 retries exhausted) |
+
+Meta AI Research moved to Meta's engineering blog AI Research feed,
+`https://engineering.fb.com/category/ai-research/feed/`, which validates.

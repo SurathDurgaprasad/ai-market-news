@@ -109,6 +109,15 @@ def upsert_source(
             f"URL {cleaned} already belongs to source {by_url.name!r}"
         )
     if existing:
+        if existing.url != cleaned:
+            # The failure history belonged to the old URL. Keeping it would
+            # back the new feed off for hours before its first fetch.
+            existing.consecutive_failures = 0
+            existing.last_failure_at = None
+            existing.last_fetch_at = None
+            existing.last_error_info = None
+            if (existing.health_status or "").lower() != "disabled":
+                existing.health_status = "healthy"
         existing.name = source_name
         existing.organization_id = org.id
         existing.url = cleaned

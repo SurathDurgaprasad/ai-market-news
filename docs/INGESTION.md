@@ -85,6 +85,19 @@ Semantic merge: an incoming article is compared by the LLM only with the
 content words and entities. Previously one article that shared only
 "OpenAI" with many events could make 22 sequential relationship calls.
 
+Avoided LLM work:
+- A known article is re-fetched for edits only within 7 days of first
+  being stored (`UPDATE_RECHECK_WINDOW`); older known URLs are duplicates
+  without a page download.
+- Community-tier (general-tech aggregator) stories outside AI scope are
+  rejected before any LLM call, using the same rule the week feed applies.
+- Rejected articles are stored with `enrichment_status = "rejected"` and
+  skipped on later polls before any fetch or LLM call.
+
+Changing a source URL (`manage_sources.py update --url`, or a curated URL
+change on re-seed) clears the old URL's failure history so the new feed
+is fetched on the next tick instead of after backoff.
+
 Data repairs (dry run by default, reversible):
 `manage_sources.py repair-versions` restores the first-recorded time on
 versions created only by page counters; `repair-headlines` restores a
