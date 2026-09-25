@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI World Intelligence",
+  title: { default: "AI World Intelligence", template: "%s · AI World Intelligence" },
   description: "Live, source-grounded intelligence on the global AI ecosystem.",
 };
 

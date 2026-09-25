@@ -69,6 +69,18 @@ class RelatedEventResponse(BaseModel):
         return _iso_utc(dt)
 
 
+class PreviousVersionResponse(BaseModel):
+    """An earlier version of the same source page, replaced by a material edit."""
+    id: str
+    version: int
+    headline: str
+    recorded_at: datetime
+
+    @field_serializer("recorded_at")
+    def _ser_recorded_at(self, dt: datetime, _info):
+        return _iso_utc(dt)
+
+
 class EventResponse(BaseModel):
     id: str
     headline: str
@@ -100,6 +112,13 @@ class EventResponse(BaseModel):
     superseded_by_id: Optional[str] = None
     canonical_id: Optional[str] = None
     related: List[RelatedEventResponse] = []
+    # Distinct publishers whose articles are merged into this event.
+    source_count: int = 1
+    # A material edit of the source page replaced an earlier version. False
+    # for versions recorded only because page chrome or counters changed.
+    is_update: bool = False
+    # Earlier versions of the same page, newest first (detail view only).
+    previous_versions: List[PreviousVersionResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -164,7 +183,9 @@ def _event_response(
     else:
         entities = primary
         extra = []
+    reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
     return EventResponse(
+        is_update=(event.version or 1) > 1 and "churn_created_at" not in reasoning,
         id=str(event.id),
         headline=event.headline,
         short_summary=event.short_summary,
@@ -240,10 +261,16 @@ def _build_linked_articles(db: Session, event_id) -> List[LinkedArticleResponse]
         .all()
     )
     result = []
+    pages = set()
     for ea, article, source in rows:
+        page = _safe_http_url(article.url) or ""
+        # Versions of one page are one piece of evidence, not extra coverage.
+        if page and page in pages:
+            continue
+        pages.add(page)
         result.append(LinkedArticleResponse(
             title=article.title,
-            url=_safe_http_url(article.url) or "",
+            url=page,
             source_name=source.name,
             source_tier=source.tier,
             published_at=article.published_at,
@@ -419,7 +446,13 @@ def get_events(
     # Linked articles are omitted from the list view for performance.
     # They are populated in the single-event detail endpoint.
     hosts = _primary_hosts(db)
-    return [_event_response(event, primary_hosts=hosts) for event in events]
+    linked = _linked_sources_by_event(db, [event.id for event in events])
+    responses = []
+    for event in events:
+        response = _event_response(event, primary_hosts=hosts)
+        response.source_count = max(1, len(linked.get(event.id, [])))
+        responses.append(response)
+    return responses
 
 
 @router.get("/new_count", response_model=dict)
@@ -608,6 +641,67 @@ def _related_events(db: Session, event: Event, limit: int = 5) -> List[RelatedEv
     return [item[1] for item in scored[:limit]]
 
 
+def _current_evidence(db: Session, event: Event) -> List[str]:
+    """
+    Stored citations that still pass today's evidence validator against the
+    primary article. Citations stored before the claim-support rule existed
+    are real source text but can be unrelated to the card's claim; "Quoted
+    from the source" must not present them as support.
+    """
+    from app.core.deduplication import validate_evidence
+
+    article = (
+        db.query(Article)
+        .join(EventArticle, EventArticle.article_id == Article.id)
+        .filter(EventArticle.event_id == event.id, EventArticle.link_type == "primary")
+        .first()
+    )
+    stored = [item for item in (event.citations or []) if isinstance(item, str)]
+    if article is None or not stored:
+        return present_citations(stored)
+    claim = " ".join(part for part in (event.headline, event.short_summary, event.what_changed) if part)
+    source = f"{article.title}\n\n{article.raw_content or ''}"
+    return present_citations(validate_evidence(source, stored, claim=claim))
+
+
+def _page_url(url: Optional[str]) -> str:
+    return (url or "").split("#update-")[0]
+
+
+def _previous_versions(db: Session, event: Event, limit: int = 10) -> List[PreviousVersionResponse]:
+    """
+    Earlier versions of the same source page. A version chain shares the
+    page URL; a merged duplicate from another publisher does not, and is
+    evidence, not a version.
+    """
+    page = _page_url(event.article_url)
+    reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+    if not page or (event.version or 1) <= 1 or "churn_created_at" in reasoning:
+        return []
+    out: List[PreviousVersionResponse] = []
+    current = event
+    seen = {event.id}
+    while len(out) < limit:
+        prior = (
+            db.query(Event)
+            .filter(Event.superseded_by_id == current.id)
+            .order_by(Event.version.desc())
+            .all()
+        )
+        prior = [row for row in prior if row.id not in seen and _page_url(row.article_url) == page]
+        if not prior:
+            break
+        current = prior[0]
+        seen.add(current.id)
+        out.append(PreviousVersionResponse(
+            id=str(current.id),
+            version=current.version or 1,
+            headline=current.headline or "",
+            recorded_at=current.created_at,
+        ))
+    return out
+
+
 @router.get("/{event_id}/resolve")
 def resolve_event(event_id: str, db: Session = Depends(get_db)):
     """
@@ -656,4 +750,9 @@ def get_event(event_id: str, db: Session = Depends(get_db)):
     else:
         response.canonical_id = str(event.id)
         response.related = _related_events(db, event)
+        response.previous_versions = _previous_versions(db, event)
+        response.citations = _current_evidence(db, event)
+    response.source_count = max(
+        1, len({article.source_name for article in response.linked_articles if article.source_name})
+    )
     return response

@@ -53,7 +53,8 @@ export const NewEventsNotifier: React.FC<{ latestEventTimestamp: string }> = ({
           onClick={() => {
             setNewCount(0);
             router.refresh();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            window.scrollTo({ top: 0, behavior: still ? 'auto' : 'smooth' });
           }}
           className="inline-flex flex-col items-start rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-left transition-colors hover:border-accent hover:bg-accent/15"
         >

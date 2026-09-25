@@ -35,9 +35,11 @@ This rewrite replaces that description with the real one.
   every connection — `backend/app/db/session.py`). Tests use an in-memory
   SQLite engine.
 - **LLM layer**: a provider-abstraction (`backend/app/core/providers/llm.py`)
-  with concrete implementations for NVIDIA (the configured production
-  provider — model `openai/gpt-oss-20b` via NVIDIA's OpenAI-compatible
-  NIM endpoint), OpenAI, and Anthropic, plus a deterministic
+  with concrete implementations for OpenAI (the configured production
+  provider since 2026-09-25 — model `gpt-4.1`), NVIDIA (`openai/gpt-oss-20b`
+  via NVIDIA's OpenAI-compatible NIM endpoint; replaced as the default after
+  tens-of-seconds latency and 330s outages stalled live ingestion),
+  Anthropic and Amazon Bedrock, plus a deterministic
   `TestLLMProvider` used only under `TESTING=1`/`TEST_MODE=1`, and a
   `FailClosedLLMProvider` that raises on every call when no production
   provider is configured. Production never silently substitutes
@@ -49,11 +51,15 @@ This rewrite replaces that description with the real one.
   deliberately in Phase 1 after `OpenAIProvider` and `AnthropicProvider`
   were found to have real, independent SDK-compatibility bugs that made
   every real call to either of them crash; see
-  `docs/RED_TEAM_REPORT.md` `OPENAI-BROKEN-01`. Only NVIDIA is exercised
-  by a live-call test tier (gated behind `NVIDIA_API_KEY`); OpenAI/
-  Anthropic are covered by tests that exercise the real SDK object
-  against a fake transport, not a live endpoint (documented residual gap
-  — see that finding's "neighboring attack" note).
+  `docs/RED_TEAM_REPORT.md` `OPENAI-BROKEN-01`. NVIDIA and OpenAI are
+  exercised by live-call test tiers (`live_nvidia`, `live_openai` markers,
+  gated behind their API keys) and `validate_openai_live.py` checks OpenAI
+  output on real stored articles; Anthropic/Bedrock are covered by tests
+  that exercise the real SDK object against a fake transport, not a live
+  endpoint. Untrusted text reaches every real provider through
+  `_as_untrusted`, which also removes sentences addressed to the model
+  (`quarantine_instructions`): gpt-4.1-mini obeyed an injected "set
+  importance_score to 100" paragraph in live tests before this.
 
 There is no message broker, no worker pool, and no vector database in
 the running system today. `backend/app/worker/` (Celery scaffolding) and

@@ -6,6 +6,7 @@ export default function Loading() {
   return (
     <main className="flex-1 bg-canvas text-ink" aria-busy="true" aria-label="Loading overview">
       <div className="intel-shell py-6 lg:py-8">
+        <p className="sr-only" role="status">Loading the market overview…</p>
         <div className="mb-8 border-b border-line pb-5">
           <Bar className="h-7 w-72 max-w-full" />
           <Bar className="mt-2 h-3 w-96 max-w-full" />

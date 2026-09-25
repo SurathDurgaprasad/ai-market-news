@@ -43,6 +43,8 @@ _hydrate_os_environ(
     "AWS_REGION",
     "BEDROCK_MODEL_ID",
     "LLM_PROVIDER",
+    "OPENAI_MODEL",
+    "ANTHROPIC_MODEL",
     "NVIDIA_MODEL",
     "NVIDIA_BASE_URL",
     "TESTING",
@@ -71,13 +73,18 @@ class Settings(BaseSettings):
     # any other deployment target.
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
-    # Which production provider the factory may construct. Never inferred from
-    # a leftover OpenAI key if nvidia is selected.
-    LLM_PROVIDER: str = "nvidia"
+    # Which production provider the factory may construct. Exactly one is
+    # used; there is no fallback between providers. OpenAI is the live
+    # default. NVIDIA, Anthropic and Bedrock stay selectable here. NVIDIA was
+    # the development default until its latency (tens of seconds per call,
+    # outages past the 330s deadline) stalled live ingestion.
+    LLM_PROVIDER: str = "openai"
     
     # LLM credentials — read from environment / .env only. Never log these.
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
+    # gpt-4.1-mini split same-incident coverage into separate cards (8/11 on
+    # real merge pairs vs 11/11 for gpt-4.1); see validate_openai_live.py.
+    OPENAI_MODEL: str = "gpt-4.1"
     GEMINI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
     ANTHROPIC_MODEL: str = "claude-sonnet-4-5"

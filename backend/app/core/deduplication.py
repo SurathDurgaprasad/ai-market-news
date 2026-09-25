@@ -770,7 +770,8 @@ _INSTRUCTION_CONTEXT = re.compile(
     r"ignore (?:all |any |the )?(?:previous|prior|above|earlier)|"
     r"disregard (?:all |any |the )?(?:previous|prior|above|earlier)|"
     r"(?:ignore|reveal|override|disregard|print) (?:the |your )?system prompt|"
-    r"developer note|note to (?:the )?(?:ai|model|assistant|llm|summari[sz]er|reader model)|"
+    r"developer note|not(?:e|ice) to (?:the )?(?:ai|model|assistant|llm|summari[sz]er|reader model)|"
+    r"instructions? (?:for|to) (?:the )?(?:ai|model|assistant|llm|summari[sz]er)|"
     # Addressed to the reader-model and about what to produce. "You must be
     # signed in" and "the model must be fine-tuned" are ordinary page text.
     r"(?:you|the (?:ai|assistant|llm|summari[sz]er)) (?:must|should|are required to|have to|will now) "
@@ -788,6 +789,45 @@ _INSTRUCTION_CONTEXT = re.compile(
 def is_instruction_context(text: Optional[str]) -> bool:
     """True when text addresses the model rather than stating the article's facts."""
     return bool(_INSTRUCTION_CONTEXT.search(text or ""))
+
+
+INSTRUCTION_PLACEHOLDER = "[text addressed to an AI model removed]"
+_SENTENCE_SPLIT = re.compile(r"((?<=[.!?])\s+|\n+)")
+_LONG_SENTENCE = 400
+_DIRECTIVE_REACH = 200
+
+
+def quarantine_instructions(text: Optional[str]) -> str:
+    """
+    Remove sentences addressed to the model before untrusted text reaches a
+    prompt. The prompt already says to ignore such text, but instruction-
+    following models (gpt-4.1-mini in live tests) still raised
+    importance_score to 100 when an article told them to. Uses the same
+    pattern as the evidence gate. The stored article is unchanged; only the
+    model input is. A run-on segment without sentence breaks loses only the
+    directive and the text right after it, never the whole article.
+    """
+    text = text or ""
+    if not _INSTRUCTION_CONTEXT.search(text):
+        return text
+    parts = _SENTENCE_SPLIT.split(text)
+    for i in range(0, len(parts), 2):
+        segment = parts[i]
+        if not _INSTRUCTION_CONTEXT.search(segment):
+            continue
+        if len(segment) <= _LONG_SENTENCE:
+            parts[i] = INSTRUCTION_PLACEHOLDER
+            continue
+        out, pos = [], 0
+        for match in _INSTRUCTION_CONTEXT.finditer(segment):
+            if match.start() < pos:
+                continue
+            out.append(segment[pos:match.start()])
+            out.append(INSTRUCTION_PLACEHOLDER)
+            pos = min(len(segment), match.end() + _DIRECTIVE_REACH)
+        out.append(segment[pos:])
+        parts[i] = "".join(out)
+    return "".join(parts)
 
 
 def _claim_stems(text: Optional[str]) -> set[str]:

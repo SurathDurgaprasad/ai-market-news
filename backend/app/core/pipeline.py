@@ -2,6 +2,7 @@ from typing import Optional, Callable
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 import logging
+import re
 
 from app.models.article import Article
 from app.models.event import Event
@@ -275,6 +276,7 @@ class IntelligencePipeline:
 
         is_same_url_update = False
         original_event_id_to_supersede = None
+        edited_supporting_event = None
 
         if existing_article_by_url is not None and existing_article_by_url.enrichment_status == ENRICHMENT_PENDING:
             # Seen again in the feed while waiting for enrichment. The stored
@@ -295,7 +297,11 @@ class IntelligencePipeline:
                 candidate = self._live_event(
                     self.db.query(Event).filter(Event.id == base_link.event_id).first()
                 )
-                if candidate:
+                if candidate and base_link.link_type != "primary":
+                    # Edited supporting report: evidence for the card, not a version.
+                    is_same_url_update = False
+                    edited_supporting_event = candidate
+                elif candidate:
                     original_event_id_to_supersede = candidate.id
 
         if existing_article_by_url:
@@ -345,6 +351,15 @@ class IntelligencePipeline:
                     candidate = self._live_event(candidate)
                     if candidate:
                         original_event_id_to_supersede = candidate.id
+                    if link.link_type != "primary" and candidate is not None:
+                        # An edited supporting report is more evidence for the
+                        # same card, not a new version of it. Superseding here
+                        # replaced a merged card's headline and primary with
+                        # the supporting outlet's page and stranded the rest
+                        # of its evidence on the old version.
+                        is_same_url_update = False
+                        original_event_id_to_supersede = None
+                        edited_supporting_event = candidate
 
         hash_query = self.db.query(Article).filter(Article.hash == content_hash)
         if pending_article is not None:
@@ -361,7 +376,7 @@ class IntelligencePipeline:
         forty_eight_hours_ago = datetime.now(timezone.utc) - timedelta(hours=48)
         
         recent_articles = self.db.query(Article).filter(Article.ingested_at >= forty_eight_hours_ago).order_by(Article.ingested_at.desc()).limit(200).all()
-        matched_event = None
+        matched_event = edited_supporting_event
         
         if not is_same_url_update:
             for ra in recent_articles:
@@ -527,7 +542,12 @@ class IntelligencePipeline:
                         entity_lower = entity.lower()
                         if (entity_lower in summary_lower
                                 or entity_lower in headline_lower
-                                or entity_lower in stored_entities):
+                                or entity_lower in stored_entities
+                                # "Muse" names the product inside "Muse Charm".
+                                # Without this the second report of Meta's
+                                # Muse Charm never reached a relationship check.
+                                or any(len(stored) >= 4 and re.search(rf"\b{re.escape(stored)}\b", entity_lower)
+                                       for stored in stored_entities)):
                             overlap = True
                             break
 
@@ -824,6 +844,25 @@ class IntelligencePipeline:
                 if original_event:
                     original_event.superseded_by_id = new_event.id
                     self.db.add(original_event)
+                    # Other reports merged into the card stay its evidence;
+                    # only the edited page's own previous text is replaced.
+                    from app.models.event import EventArticle
+                    page = canonical_display_url
+                    for carried in (
+                        self.db.query(EventArticle, Article)
+                        .join(Article, EventArticle.article_id == Article.id)
+                        .filter(EventArticle.event_id == original_event.id)
+                        .all()
+                    ):
+                        link_row, linked_article = carried
+                        if (linked_article.url or "").split("#update-")[0] == page:
+                            continue
+                        self.db.add(EventArticle(
+                            event_id=new_event.id,
+                            article_id=linked_article.id,
+                            link_type="supporting",
+                            similarity_score=link_row.similarity_score,
+                        ))
                     
                 # Link Primary Article
                 from app.models.event import EventArticle

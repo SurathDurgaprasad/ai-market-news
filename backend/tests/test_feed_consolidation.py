@@ -265,3 +265,15 @@ def test_same_story_a_year_apart_stays_two_cards(db_session):
         ))
     db_session.commit()
     assert consolidate_safe_duplicates(db_session) == 0
+
+
+def test_a_car_model_is_not_an_ai_model():
+    """A bare "model" put a Corolla EV story on the AI feed."""
+    assert not is_feed_in_scope(
+        "Toyota to Launch Electric Corolla with Multiple Powertrains by 2027",
+        "The electric model is expected to debut in 2027 as a 2028 model year.",
+        "community",
+    )
+    assert is_feed_in_scope("Lab publishes open model weights for a 7B coder", "", "community")
+    assert is_feed_in_scope("New language model tops leaderboard", "", "secondary")
+    assert is_feed_in_scope("Startup releases reasoning model", "", "secondary")

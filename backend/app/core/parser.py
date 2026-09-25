@@ -89,6 +89,43 @@ def _strip_tags(text: str) -> str:
     return "".join(out)
 
 
+_BLOCK_EDGE = re.compile(r"<(/?)(div|section)\b[^>]*>", re.IGNORECASE)
+_PROMO_BLOCK = re.compile(
+    r"<(div|section)\b[^>]*\bclass=[\"'](?:[^\"']*\s)?(?:[\w-]*[-_])?promo(?:[-_][\w-]*)?(?:\s[^\"']*)?[\"'][^>]*>",
+    re.IGNORECASE,
+)
+_MAX_PROMO_BLOCKS = 50
+
+
+def drop_promo_blocks(html: str) -> str:
+    """
+    Remove promotional blocks (class "promo", "msr-promo", "promo-box", ...)
+    with their nested divs. Microsoft Research rotates a podcast/event promo
+    inside every post, feed body included; left in, each poll looked like an
+    edited article.
+    """
+    out: list[str] = []
+    pos = 0
+    for _ in range(_MAX_PROMO_BLOCKS):
+        opening = _PROMO_BLOCK.search(html, pos)
+        if not opening:
+            break
+        depth, end = 1, None
+        for edge in _BLOCK_EDGE.finditer(html, opening.end()):
+            depth += -1 if edge.group(1) else 1
+            if depth == 0:
+                end = edge.end()
+                break
+        if end is None:
+            break  # unbalanced markup: keep the rest as it is
+        out.append(html[pos:opening.start()])
+        out.append(" ")
+        pos = end
+    out.append(html[pos:])
+    return "".join(out)
+
+
+
 def sanitize_html(html_str: str) -> str:
     if not html_str:
         return ""
@@ -96,6 +133,7 @@ def sanitize_html(html_str: str) -> str:
     cleaned = re.sub(r'<style\b[^>]*>.*?</style>', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r'<noscript\b[^>]*>.*?</noscript>', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r'<!--.*?-->', '', cleaned, flags=re.DOTALL)
+    cleaned = drop_promo_blocks(cleaned)
     # Quote-aware: a quoted attribute value may legally contain ">" (for
     # example JSON props carrying "<p>...</p>"). Ending the tag at the first
     # ">" leaked the rest of the attribute into the article text.

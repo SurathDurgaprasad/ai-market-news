@@ -100,8 +100,22 @@ is fetched on the next tick instead of after backoff.
 
 Data repairs (dry run by default, reversible):
 `manage_sources.py repair-versions` restores the first-recorded time on
-versions created only by page counters; `repair-headlines` restores a
+versions created only by page counters; `--refetch` also compares version 1
+with the live page under today's extractor, which catches versions created
+by page chrome (Microsoft Research's rotating `msr-promo` block, Hugging
+Face comment JSON). Only versions not marked as churn are shown as
+"Updated" in the UI (`is_update`). `repair-headlines` restores a
 confidently known organization in placeholder headlines.
+`recheck-duplicates` asks the configured relationship model about recent
+live cards that ingestion never compared (same filters as ingestion:
+within 48 hours, overlapping entities, compatible kinds, most similar
+first) and merges only SAME_EVENT pairs. It compares the two cards, not
+raw article text, so a newsletter roundup does not match every story it
+mentions.
+
+Promotional blocks (`class` containing a `promo` token, with nested divs)
+are removed by `sanitize_html`, so feed bodies and fetched pages both lose
+them before hashing and change detection.
 `GET /events/overview` reports `pending_enrichment` and
 `enrichment_paused`; `/api/health` reports `enrichment_paused`.
 

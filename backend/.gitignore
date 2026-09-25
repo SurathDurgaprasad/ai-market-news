@@ -5,3 +5,4 @@
 __pycache__/
 .pytest_cache/
 nvidia_live_report.json
+openai_live_report.json

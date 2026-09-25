@@ -58,7 +58,7 @@ button:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  span.animate-pulse {
+  .animate-pulse {
     animation: none;
   }
 }

@@ -117,7 +117,7 @@ function CardMeta({ card }: { card: OverviewCard }) {
           {card.source_name ? `: ${card.source_name}` : ""}
         </span>
       ) : null}
-      {card.source_count > 1 ? <span> · {countLabel(card.source_count, "source", "sources")}</span> : null}
+      {card.source_count > 1 ? <span> · {countLabel(card.source_count, "publisher", "publishers")}</span> : null}
     </p>
   );
 }
@@ -175,12 +175,21 @@ function BiggestCard({ card }: { card: OverviewCard }) {
 function evidenceLine(week: number, sources: number, recent?: number): string {
   const parts = [
     `${week} ${week === 1 ? "development" : "developments"}`,
-    countLabel(sources, "source", "sources"),
+    countLabel(sources, "publisher", "publishers"),
   ];
   if ((recent ?? 0) > 0) {
     parts.push(`${recent} in 36h`);
   }
   return parts.join(" · ");
+}
+
+// Trending is about the last 36 hours, so that count leads; the week gives scale.
+function trendLine(row: TrendActivity): string {
+  return [
+    `${row.recent} new in 36h`,
+    `${row.week} this week`,
+    countLabel(row.sources, "publisher", "publishers"),
+  ].join(" · ");
 }
 
 function TrendList({ rows }: { rows: TrendActivity[] }) {
@@ -189,9 +198,7 @@ function TrendList({ rows }: { rows: TrendActivity[] }) {
       {rows.map((row) => (
         <li key={row.label} className="flex items-baseline justify-between gap-3 border-b border-line py-2.5 last:border-b-0">
           <span className="text-[13px] font-medium text-ink">{row.label}</span>
-          <span className="text-right text-[12px] tabular-nums text-secondary">
-            {evidenceLine(row.week, row.sources, row.recent)}
-          </span>
+          <span className="text-right text-[12px] tabular-nums text-secondary">{trendLine(row)}</span>
         </li>
       ))}
     </ul>
@@ -239,7 +246,7 @@ function playerStats(player: PlayerActivity): string {
     parts.push(`${player.substantive} substantive`);
   }
   if (player.sources > 0) {
-    parts.push(countLabel(player.sources, "source", "sources"));
+    parts.push(countLabel(player.sources, "publisher", "publishers"));
   }
   if ((player.recent ?? 0) > 0) {
     parts.push(`${player.recent} in 36h`);
@@ -316,7 +323,7 @@ export function MarketOverview({
               id="trending"
               kicker="Last 36 hours"
               title="Trending"
-              note="Categories with distinct developments from more than one publisher."
+              note="Categories with new developments in the last 36 hours and more than one publisher this week. Accelerating categories, with 40% or more of the week's developments in the last 36 hours, are listed first."
             />
             {trending.length > 0 ? (
               <TrendList rows={trending} />

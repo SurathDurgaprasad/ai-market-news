@@ -20,8 +20,9 @@ _PROMO = re.compile(
 )
 
 # Word-boundary signals that the item is an AI development. Primary and
-# research sources skip this check. "model" is included because hardware
-# and release headlines often say "model" without the letters "AI".
+# research sources skip this check. "model" counts only in an AI context
+# ("language model", "open model", "model weights"): a bare "model" let a
+# car story ("2028 model year", "12 model changes") onto the feed.
 # A bare "GPU" is not enough: community posts about ordinary graphics
 # firmware match it without being an AI development. NVIDIA and CUDA
 # still match on their own.
@@ -35,7 +36,10 @@ _AI_SIGNAL = re.compile(
     r"bedrock|cuda|nvidia|hugging\s?face|langchain|"
     r"fine-?tun\w*|checkpoints?|parameters?|mixture-of-experts?|"
     r"algorithms?|chatbots?|autonomous|computer vision|facial recognition|"
-    r"copilots?|language models?|surveillance|models?"
+    r"copilots?|language models?|surveillance|"
+    r"(?:ai|ml|language|foundation|frontier|reasoning|vision|video|image|speech|audio|voice|"
+    r"embedding|open|open-source|base|chat|coding|world|reward|weather)[- ]models?|"
+    r"models?(?= (?:weights?|releases?|card|training|inference|checkpoints?|context))"
     r")\b",
     re.IGNORECASE,
 )

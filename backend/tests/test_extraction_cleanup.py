@@ -72,3 +72,56 @@ def test_a_different_cut_point_of_a_capped_body_is_not_an_edit():
     middle = MAX_CONTENT_CHARS // 2
     edited = old[:middle] + " Update: final release delayed to October. " + old[middle:]
     assert not is_immaterial_change(old, edited[:MAX_CONTENT_CHARS])
+
+
+def test_rotating_promo_block_is_not_article_text():
+    """Microsoft Research rotates this block per request; kept, every poll looked like an edit."""
+    from app.core.article_body import _prefer_main_html
+    from app.core.parser import sanitize_html
+
+    def page(promo: str) -> str:
+        return (
+            '<html><body><div class="entry-content">'
+            "<p>CARE-X is a research model that unifies chest X-ray interpretation tasks.</p>"
+            '<div class="border-top msr-promo text-center" data-bi-aN="promo">'
+            f'<p class="msr-promo__label"><span>{promo}</span></p>'
+            '<div class="row"><div class="col">Listen now</div></div></div>'
+            "<p>It combines generative and discriminative capabilities.</p>"
+            "</div></body></html>"
+        )
+
+    first = sanitize_html(_prefer_main_html(page("PODCAST SERIES")))
+    second = sanitize_html(_prefer_main_html(page("Microsoft Research at BUILD 2026")))
+    assert first == second
+    assert "Listen now" not in first
+    assert "generative and discriminative" in first
+
+
+def test_promotion_words_in_ordinary_classes_are_kept():
+    from app.core.parser import drop_promo_blocks as _drop_promo_blocks
+
+    html = '<div class="promotional-offer">keep a</div><div class="promotion">keep b</div>'
+    assert _drop_promo_blocks(html) == html
+
+
+def test_feed_body_promo_is_dropped_too():
+    """The Microsoft Research RSS body carries the same rotating promo block."""
+    from app.core.parser import parse_rss_feed
+
+    def feed(promo: str) -> str:
+        body = (
+            "<p>Orchard is an open framework for scalable agentic AI.</p>"
+            f'<div class="msr-promo"><p><span>{promo}</span></p><div><a href="#">Learn more</a></div></div>'
+            "<p>It runs agents across many machines.</p>"
+        )
+        return (
+            '<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+            "<channel><title>MSR</title><item><title>Orchard</title><link>https://ms.example/orchard</link>"
+            f"<content:encoded><![CDATA[{body}]]></content:encoded></item></channel></rss>"
+        )
+
+    first = parse_rss_feed(feed("PODCAST SERIES"))[0].content
+    second = parse_rss_feed(feed("Microsoft Research at BUILD 2026"))[0].content
+    assert first == second
+    assert "Learn more" not in first
+    assert "runs agents across many machines" in first

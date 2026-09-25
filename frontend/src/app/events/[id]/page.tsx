@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { cache } from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound, redirect, unstable_rethrow } from 'next/navigation';
 import { API_V1 } from '@/lib/api';
@@ -25,6 +26,13 @@ type RelatedEvent = {
   reason: string;
 };
 
+type PreviousVersion = {
+  id: string;
+  version: number;
+  headline: string;
+  recorded_at: string;
+};
+
 type EventDetail = {
   id: string;
   headline: string;
@@ -45,13 +53,18 @@ type EventDetail = {
   linked_articles?: LinkedArticle[];
   canonical_id?: string | null;
   related?: RelatedEvent[];
+  version?: number;
+  is_update?: boolean;
+  source_count?: number;
+  previous_versions?: PreviousVersion[];
 };
 
 type Loaded = { kind: 'ok'; event: EventDetail } | { kind: 'missing' } | { kind: 'unavailable' };
 
 const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 
-async function getEvent(id: string): Promise<Loaded> {
+// Shared by generateMetadata and the page: one API request per render.
+const getEvent = cache(async (id: string): Promise<Loaded> => {
   if (!UUID.test(id)) return { kind: 'missing' };
   try {
     const res = await fetch(`${API_V1}/events/${encodeURIComponent(id)}`, { cache: 'no-store' });
@@ -63,6 +76,18 @@ async function getEvent(id: string): Promise<Loaded> {
     console.error('Failed to fetch event detail:', error);
     return { kind: 'unavailable' };
   }
+});
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const loaded = await getEvent((await params).id);
+  if (loaded.kind === 'ok') {
+    return { title: loaded.event.headline, description: factualSummary(loaded.event.short_summary) || undefined };
+  }
+  return { title: loaded.kind === 'missing' ? 'Event not found' : 'Event unavailable' };
 }
 
 function changePoints(value?: string | null): string[] {
@@ -140,7 +165,13 @@ export default async function EventDetailPage({
   const tier = importanceMeta(event.importance_score ?? 0);
   const occurred = event.event_time ?? event.created_at;
   const displayTime = published(occurred);
-  const firstSeen = formatUtcMeta(event.created_at);
+  const versions = Array.isArray(event.previous_versions) ? event.previous_versions : [];
+  const version = event.version ?? 1;
+  // Versions recorded only because page chrome changed are not updates.
+  const isUpdate = event.is_update === true;
+  const updatedAt = isUpdate ? formatUtcMeta(event.created_at) : '';
+  // A page edit creates a new version; the development was first recorded with version 1.
+  const firstSeen = formatUtcMeta(versions.length > 0 ? versions[versions.length - 1].recorded_at : event.created_at);
   const summary = factualSummary(event.short_summary);
   const imageRole = asImageRole(event.image_role);
   const safeImageUrl =
@@ -195,6 +226,13 @@ export default async function EventDetailPage({
             {source?.name ? <span className="font-medium text-secondary">{source.name}</span> : null}
             {source?.name && displayTime ? ' · ' : null}
             {displayTime ? <time dateTime={occurred}>{displayTime}</time> : null}
+            {updatedAt ? (
+              <span>
+                {' · '}
+                <span className="text-accent">Updated</span>{' '}
+                <time dateTime={event.created_at}>{updatedAt}</time>
+              </span>
+            ) : null}
           </p>
         </header>
 
@@ -251,7 +289,7 @@ export default async function EventDetailPage({
             {entities.length > 0 ? (
               <section aria-labelledby="entities">
                 <h2 id="entities" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                  Who is involved
+                  Named in the source
                 </h2>
                 <ul className="flex max-w-[64ch] flex-wrap gap-2">
                   {entities.slice(0, ENTITY_PREVIEW).map((entity) => (
@@ -332,6 +370,12 @@ export default async function EventDetailPage({
                 <dd className="text-secondary">{Math.max(publishers.size, 1)}</dd>
                 <dt className="text-muted">First recorded</dt>
                 <dd className="text-secondary">{firstSeen}</dd>
+                {isUpdate ? (
+                  <>
+                    <dt className="text-muted">Version</dt>
+                    <dd className="text-secondary">{version} · source page updated</dd>
+                  </>
+                ) : null}
               </dl>
               <p className="mt-3 text-[12px] leading-relaxed text-muted">
                 {linked.length > 1
@@ -339,6 +383,30 @@ export default async function EventDetailPage({
                   : 'One article reports this development so far. Later reports of it are merged here.'}
               </p>
             </section>
+
+            {versions.length > 0 ? (
+              <section className="rounded-md border border-line bg-surface p-5">
+                <SideHeading>Update history</SideHeading>
+                <p className="mb-3 text-[12px] leading-relaxed text-muted">
+                  The source page changed materially after it was first recorded. This card shows the latest version.
+                </p>
+                <ol className="space-y-2.5">
+                  <li>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary">
+                      Version {version} · current · {updatedAt}
+                    </p>
+                  </li>
+                  {versions.map((item) => (
+                    <li key={item.id}>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                        Version {item.version} · {formatUtcMeta(item.recorded_at)}
+                      </p>
+                      <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-secondary">{item.headline}</p>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
 
             {citations.length > 0 ? (
               <section className="rounded-md border border-line bg-surface p-5">

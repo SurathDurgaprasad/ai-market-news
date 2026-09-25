@@ -125,6 +125,20 @@ describe('EventCard', () => {
     );
     expect(markup).not.toContain('javascript:');
   });
+
+  it('shows merged coverage and an updated source page, and nothing for a single report', () => {
+    const merged = html(<EventCard event={{ ...EVENT, source_count: 3, is_update: true }} />);
+    expect(merged).toContain('+2 publishers');
+    expect(merged).toContain('Updated');
+    const single = html(<EventCard event={{ ...EVENT, source_count: 1, is_update: false }} />);
+    expect(single).not.toContain('publisher');
+    expect(single).not.toContain('Updated');
+  });
+
+  it('dates each card when the list has no day headings', () => {
+    expect(html(<EventCard event={EVENT} withDate />)).toContain('23 Sep');
+    expect(html(<EventCard event={EVENT} />)).not.toContain('23 Sep');
+  });
 });
 
 describe('MarketOverview', () => {

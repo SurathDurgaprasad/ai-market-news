@@ -10,7 +10,8 @@ From the backend/ directory:
     python manage_sources.py update --name "OpenAI Research" --url "https://example.com/new.xml"
     python manage_sources.py ingest
     python manage_sources.py repair-headlines [--apply]
-    python manage_sources.py repair-versions [--apply]
+    python manage_sources.py repair-versions [--refetch] [--apply]
+    python manage_sources.py recheck-duplicates [--max-checks N] [--apply]
 
 `ingest` runs one scheduler cycle immediately. The running API also picks up
 enabled rows on its next tick. Disabled rows are not fetched.
@@ -138,17 +139,89 @@ def cmd_repair_headlines(args) -> int:
     return 0
 
 
+def _live_text_lookup(db):
+    """
+    Text today's pipeline would store for a URL: the feed body when the
+    source's feed carries one, otherwise the extracted page. Feeds are read
+    once, on first use.
+    """
+    from app.core.article_body import MIN_CONTENT_CHARS, enrich_article
+    from app.core.deduplication import normalize_url
+    from app.core.fetcher import fetch_url
+    from app.core.parser import parse_rss_feed
+    from app.models.source import Source
+
+    bodies: dict = {}
+    loaded = []
+
+    def lookup(url: str):
+        if not loaded:
+            loaded.append(True)
+            for (feed_url,) in db.query(Source.url).filter(Source.enabled.is_(True)).all():
+                try:
+                    for item in parse_rss_feed(fetch_url(feed_url).text):
+                        bodies.setdefault(normalize_url(item.url), item.content)
+                except Exception as exc:  # one dead feed does not stop the repair
+                    print(f"feed skipped: {feed_url} ({type(exc).__name__})")
+        body = bodies.get(normalize_url(url), "")
+        text, _image, _publisher = enrich_article("", url, body, fetch_fn=fetch_url)
+        return text if len(text) >= 4 * MIN_CONTENT_CHARS else None
+
+    return lookup
+
+
 def cmd_repair_versions(args) -> int:
     from app.core.consolidate import repair_churn_versions
 
     db = _ready()
     try:
-        repaired = repair_churn_versions(db, apply=args.apply)
+        refetch = None
+        if args.refetch:
+            refetch = _live_text_lookup(db)
+
+        repaired = repair_churn_versions(db, apply=args.apply, refetch=refetch)
     finally:
         db.close()
     for headline, version in repaired:
         print(f"{'repaired' if args.apply else 'would repair'}: v{version} {headline!r}")
     print(f"{len(repaired)} churn version(s) {'repaired' if args.apply else 'found (dry run; pass --apply)'}")
+
+    from app.core.consolidate import restore_version_evidence
+
+    db = _ready()
+    try:
+        from app.core.providers.llm import get_llm_provider, resolve_llm_mode
+
+        # Restored evidence must be the same development; without a model, nothing is restored.
+        if resolve_llm_mode() != "production":
+            print("No production LLM is configured; evidence restoration skipped.")
+            return 0
+        restored = restore_version_evidence(db, apply=args.apply, llm=get_llm_provider())
+    finally:
+        db.close()
+    for headline, count in restored:
+        print(f"{'restored' if args.apply else 'would restore'}: {count} article(s) to {headline!r}")
+    print(f"{len(restored)} card(s) with evidence left on old versions")
+    return 0
+
+
+def cmd_recheck_duplicates(args) -> int:
+    from app.core.consolidate import recheck_recent_duplicates
+    from app.core.providers.llm import get_llm_provider, resolve_llm_mode
+
+    if resolve_llm_mode() != "production":
+        print("No production LLM is configured; nothing was checked.")
+        return 2
+    db = _ready()
+    try:
+        merged = recheck_recent_duplicates(
+            db, get_llm_provider(), apply=args.apply, max_checks=args.max_checks
+        )
+    finally:
+        db.close()
+    for kept, duplicate in merged:
+        print(f"{'merged' if args.apply else 'would merge'}: {duplicate!r} -> {kept!r}")
+    print(f"{len(merged)} duplicate card(s) {'merged' if args.apply else 'found (dry run; pass --apply)'}")
     return 0
 
 
@@ -196,7 +269,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Restore first-recorded time on versions created only by page counters",
     )
     versions.add_argument("--apply", action="store_true")
+    versions.add_argument(
+        "--refetch",
+        action="store_true",
+        help="Also compare the first version with the live page under today's extractor",
+    )
     versions.set_defaults(func=cmd_repair_versions)
+
+    recheck = sub.add_parser(
+        "recheck-duplicates",
+        help="Ask the relationship model about recent cards ingestion never compared",
+    )
+    recheck.add_argument("--apply", action="store_true")
+    recheck.add_argument("--max-checks", type=int, default=60)
+    recheck.set_defaults(func=cmd_recheck_duplicates)
 
     args = parser.parse_args(argv)
     try:

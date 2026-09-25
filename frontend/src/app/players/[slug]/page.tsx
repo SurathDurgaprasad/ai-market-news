@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { EventCard, type EventCardData } from "@/components/EventCard";
@@ -48,6 +49,15 @@ async function getPlayerSummary(slug: string): Promise<PlayerActivity | undefine
   }
 }
 
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const name = PLAYER_NAMES[(await params).slug];
+  return { title: name ? `${name} this week` : "Player not found" };
+}
+
 export default async function PlayerPage({
   params,
 }: {
@@ -63,7 +73,7 @@ export default async function PlayerPage({
     ? [
         `${summary.week} ${summary.week === 1 ? "development" : "developments"}`,
         `${summary.substantive} substantive`,
-        `${summary.sources} ${summary.sources === 1 ? "source" : "sources"}`,
+        `${summary.sources} ${summary.sources === 1 ? "publisher" : "publishers"}`,
       ]
     : [];
 
@@ -102,7 +112,7 @@ export default async function PlayerPage({
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {events.map((event) => (
-              <EventCard key={event.id} event={event} headingLevel="h2" />
+              <EventCard key={event.id} event={event} headingLevel="h2" withDate />
             ))}
           </div>
         )}

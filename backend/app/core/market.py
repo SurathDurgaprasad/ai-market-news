@@ -322,6 +322,23 @@ def event_matches_player(event: MarketEvent, slug: str) -> bool:
     return any(found == slug for found, _name in matching_players(event))
 
 
+_GENERIC_LEAD = {"ai", "the", "a", "an", "new"}
+
+
+def _is_proper_name(entity: str) -> bool:
+    """
+    "Enveda", "Jensen Huang", "GPT-6 Sol" name someone. "AI agents" and
+    "AI biotech" describe a kind of thing; shown as the subject they read as
+    an organization that does not exist.
+    """
+    for word in entity.replace("/", " ").split():
+        if word.lower() in _GENERIC_LEAD:
+            continue
+        if word[:1].isupper() or word[:1].isdigit():
+            return True
+    return False
+
+
 def _display_organization(event: MarketEvent) -> str:
     published = _players_in([event.organization_name, event.primary_source_name])
     if published:
@@ -333,7 +350,7 @@ def _display_organization(event: MarketEvent) -> str:
         return players[0][1]
     for entity in event.entities:
         cleaned = entity.strip()
-        if cleaned:
+        if cleaned and _is_proper_name(cleaned):
             return cleaned
     # A news outlet or aggregator is who reported it, not who did it.
     # Only a curated primary or research publisher is its own subject.

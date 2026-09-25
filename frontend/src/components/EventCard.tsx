@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { factualSummary, formatUtcCardTime } from '@/lib/time';
+import { factualSummary, formatUtcCardTime, formatUtcWhen } from '@/lib/time';
 import { displaySource, evidenceLabel, type SourceRef } from '@/lib/sources';
 import {
   cardImageClass,
@@ -28,12 +28,16 @@ export interface EventCardData {
   image_url?: string;
   image_role?: ImageRole;
   article_url?: string;
+  is_update?: boolean;
+  source_count?: number;
 }
 
-export const EventCard: React.FC<{ event: EventCardData; headingLevel?: 'h2' | 'h3' | 'h4' }> = ({
-  event,
-  headingLevel: Heading = 'h3',
-}) => {
+export const EventCard: React.FC<{
+  event: EventCardData;
+  headingLevel?: 'h2' | 'h3' | 'h4';
+  // Lists without day headings (player pages) need the date on every card.
+  withDate?: boolean;
+}> = ({ event, headingLevel: Heading = 'h3', withDate = false }) => {
   const [imageFailed, setImageFailed] = useState(false);
   const tier = importanceMeta(event.importance_score);
   const source = displaySource(event);
@@ -45,10 +49,12 @@ export const EventCard: React.FC<{ event: EventCardData; headingLevel?: 'h2' | '
     safeHttpUrl(event.article_url) || safeHttpUrl(source?.url) || safeHttpUrl(event.primary_source?.url);
   const sourceLabel = evidenceLabel({ url: sourceHref, tier: source?.tier });
   const stamp = event.event_time ?? event.created_at;
-  const displayTime = formatUtcCardTime(stamp);
+  const displayTime = withDate ? formatUtcWhen(stamp) : formatUtcCardTime(stamp);
   const summary = factualSummary(event.short_summary);
   const entities = entityPreview(event.entities, 3);
   const isMinor = tier.key === 'minor';
+  const otherSources = Math.max(0, (event.source_count ?? 1) - 1);
+  const updated = event.is_update === true;
 
   return (
     <article
@@ -77,6 +83,7 @@ export const EventCard: React.FC<{ event: EventCardData; headingLevel?: 'h2' | '
             <span className="min-w-0 truncate">
               <span className={tier.badge}>{tier.label}</span>
               {event.category ? <span className="text-muted"> · {event.category}</span> : null}
+              {updated ? <span className="text-accent"> · Updated</span> : null}
             </span>
             <time className="shrink-0 font-medium normal-case tracking-wide text-muted" dateTime={stamp}>
               {displayTime}
@@ -111,7 +118,14 @@ export const EventCard: React.FC<{ event: EventCardData; headingLevel?: 'h2' | '
       </Link>
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-line/70 px-4 py-2.5">
-        <p className="min-w-0 truncate text-[12px] text-muted">{source?.name ?? 'Source unavailable'}</p>
+        <p className="min-w-0 truncate text-[12px] text-muted">
+          {source?.name ?? 'Source unavailable'}
+          {otherSources > 0 ? (
+            <span className="text-secondary">
+              {' '}+{otherSources} {otherSources === 1 ? 'publisher' : 'publishers'}
+            </span>
+          ) : null}
+        </p>
         {sourceHref ? (
           <a
             href={sourceHref}

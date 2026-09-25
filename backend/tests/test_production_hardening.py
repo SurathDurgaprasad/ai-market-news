@@ -325,6 +325,14 @@ def test_news_outlet_is_not_shown_as_the_subject_organization():
     assert _display_organization(official) == "Hugging Face"
 
 
+def test_a_description_is_not_shown_as_the_subject_organization():
+    """Live cards read "AI agents · Security" and "AI biotech · Funding"."""
+    assert _display_organization(_market("Agents escape tests", entities=["AI agents"])) == ""
+    assert _display_organization(_market("Biotech valued at $2B", entities=["AI biotech"])) == ""
+    assert _display_organization(_market("Enveda raises $311M", entities=["AI biotech", "Enveda"])) == "Enveda"
+    assert _display_organization(_market("Huang on climate", entities=["Jensen Huang"])) == "Jensen Huang"
+
+
 def test_pending_articles_are_counted_but_never_shown_as_events(client):
     from app.models.article import Article
 
@@ -361,3 +369,130 @@ def test_resolve_reports_missing_and_canonical_events(client):
     assert client.get(f"/api/v1/events/{merged_id}/resolve").json()["canonical_id"] == canonical_id
     assert client.get(f"/api/v1/events/{uuid.uuid4()}/resolve").status_code == 404
     assert client.get("/api/v1/events/not-a-uuid/resolve").status_code == 404
+
+
+# ── Coverage count and version history ─────────────────────────────────────
+
+def test_list_reports_distinct_publishers_per_event(client):
+    from app.models.article import Article
+    from app.models.event import EventArticle
+
+    db = _Session()
+    lab = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    news = _source(db, "Outlet", "https://outlet.example.com/feed", tier="secondary")
+    event = _event(db, lab, headline="Lab releases Model 5")
+    lone = _event(db, lab, headline="Lab ships a small tool", article_url="https://example.com/b",
+                   event_time=_now() - timedelta(hours=1))
+    for index, source in enumerate((lab, news, news)):
+        article = Article(id=uuid.uuid4(), source_id=source.id, url=f"https://x.example.com/{index}",
+                          title="Model 5", raw_content="Model 5 text")
+        db.add(article)
+        db.flush()
+        db.add(EventArticle(event_id=event.id, article_id=article.id,
+                            link_type="primary" if index == 0 else "supporting"))
+    db.commit()
+    event_id, lone_id = str(event.id), str(lone.id)
+    db.close()
+
+    rows = {row["id"]: row for row in client.get("/api/v1/events/").json()}
+    assert rows[event_id]["source_count"] == 2  # two articles from one outlet count once
+    assert rows[lone_id]["source_count"] == 1
+    assert client.get(f"/api/v1/events/{event_id}").json()["source_count"] == 2
+
+
+def test_detail_lists_previous_versions_of_the_same_page_only(client):
+    db = _Session()
+    lab = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    page = "https://lab.example.com/post"
+    current = _event(db, lab, headline="Lab updates Model 5 post", article_url=f"{page}#update-bb", version=3)
+    v2 = _event(db, lab, headline="Model 5 post v2", article_url=f"{page}#update-aa", version=2,
+                superseded_by_id=current.id)
+    _event(db, lab, headline="Model 5 post v1", article_url=page, version=1, superseded_by_id=v2.id)
+    # A merged duplicate from another page is evidence, not a version.
+    _event(db, lab, headline="Other outlet on Model 5", article_url="https://other.example.com/x",
+           superseded_by_id=current.id)
+    current_id = str(current.id)
+    single = _event(db, lab, headline="Unversioned", article_url="https://lab.example.com/solo")
+    single_id = str(single.id)
+    db.close()
+
+    detail = client.get(f"/api/v1/events/{current_id}").json()
+    assert [(v["version"], v["headline"]) for v in detail["previous_versions"]] == [
+        (2, "Model 5 post v2"),
+        (1, "Model 5 post v1"),
+    ]
+    assert client.get(f"/api/v1/events/{single_id}").json()["previous_versions"] == []
+
+
+def test_churn_versions_are_not_presented_as_updates(client):
+    db = _Session()
+    lab = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    page = "https://lab.example.com/churny"
+    churn = _event(db, lab, headline="Churn-only version", article_url=f"{page}#update-cc", version=2,
+                   importance_reasoning={"churn_created_at": "2026-09-24T10:00:00"})
+    _event(db, lab, headline="Original", article_url=page, version=1, superseded_by_id=churn.id)
+    real = _event(db, lab, headline="Real edit", article_url="https://lab.example.com/r#update-dd", version=2)
+    churn_id, real_id = str(churn.id), str(real.id)
+    db.close()
+
+    churn_detail = client.get(f"/api/v1/events/{churn_id}").json()
+    assert churn_detail["is_update"] is False
+    assert churn_detail["previous_versions"] == []
+    assert client.get(f"/api/v1/events/{real_id}").json()["is_update"] is True
+
+
+def test_versions_of_one_page_are_one_piece_of_evidence(client):
+    from app.models.article import Article
+    from app.models.event import EventArticle
+
+    db = _Session()
+    lab = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    event = _event(db, lab, headline="Lab releases Skala 1.1", article_url="https://lab.example.com/skala#update-aa")
+    for index, (suffix, link) in enumerate((("#update-aa", "primary"), ("#update-bb", "supporting"))):
+        article = Article(id=uuid.uuid4(), source_id=lab.id, url=f"https://lab.example.com/skala{suffix}",
+                          title="Skala", raw_content="Skala text")
+        db.add(article)
+        db.flush()
+        db.add(EventArticle(event_id=event.id, article_id=article.id, link_type=link))
+    db.commit()
+    event_id = str(event.id)
+    db.close()
+
+    detail = client.get(f"/api/v1/events/{event_id}").json()
+    assert [(a["url"], a["link_type"]) for a in detail["linked_articles"]] == [
+        ("https://lab.example.com/skala", "primary"),
+    ]
+
+
+def test_detail_shows_only_evidence_that_passes_todays_validator(client):
+    """Stored before claim support was required: real source text, unrelated to the claim."""
+    from app.models.article import Article
+    from app.models.event import EventArticle
+
+    db = _Session()
+    lab = _source(db, "Lab Blog", "https://lab.example.com/feed")
+    body = (
+        "Lab released Model 5 with a 1M token context window for enterprise customers. "
+        "Tickets for the conference go on sale on Friday at noon."
+    )
+    event = _event(
+        db, lab, headline="Lab releases Model 5 with 1M token context",
+        short_summary="Model 5 supports a 1M token context window.",
+        citations=[
+            "Lab released Model 5 with a 1M token context window for enterprise customers.",
+            "Tickets for the conference go on sale on Friday at noon.",
+        ],
+    )
+    article = Article(id=uuid.uuid4(), source_id=lab.id, url="https://lab.example.com/m5",
+                      title="Model 5", raw_content=body)
+    db.add(article)
+    db.flush()
+    db.add(EventArticle(event_id=event.id, article_id=article.id, link_type="primary"))
+    db.commit()
+    event_id = str(event.id)
+    db.close()
+
+    detail = client.get(f"/api/v1/events/{event_id}").json()
+    assert detail["citations"] == [
+        "Lab released Model 5 with a 1M token context window for enterprise customers."
+    ]

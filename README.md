@@ -8,7 +8,7 @@ Stack: FastAPI, SQLite, APScheduler, Next.js. There is no Postgres, Redis, or Ce
 
 - Python 3.12
 - Node.js 20 or newer
-- An LLM API key if you want ingestion. `LLM_PROVIDER=nvidia` and `NVIDIA_API_KEY` are the default. The site still serves events already in the database when the key is missing. It does not fall back to a test model.
+- An LLM API key if you want ingestion. `LLM_PROVIDER=openai` with `OPENAI_API_KEY` is the default (model `gpt-4.1`, override with `OPENAI_MODEL`). `nvidia`, `anthropic` and `bedrock` remain selectable. The site still serves events already in the database when the key is missing. It never falls back to a test model or to another provider; new articles are stored as pending until the configured provider responds.
 
 ## Fresh setup
 
@@ -63,10 +63,11 @@ The scheduler starts with the API and polls enabled RSS sources every 5 minutes,
 
 ```powershell
 cd backend
-python -m pytest -q -m "not live_nvidia"
+python -m pytest -q -m "not live_nvidia and not live_openai"
+python -m pytest -q -m live_openai          # live prompt-injection checks against OpenAI
 ```
 
-`live_nvidia` tests call the real NVIDIA API. They are skipped by that marker even when `NVIDIA_API_KEY` is set.
+`live_nvidia` and `live_openai` tests call the real provider APIs. The marker expression above skips them even when the keys are set.
 
 ```powershell
 cd frontend
@@ -91,6 +92,9 @@ python manage_sources.py ingest
 python manage_sources.py repair-headlines          # dry run
 python manage_sources.py repair-headlines --apply  # keeps the original in importance_reasoning
 python manage_sources.py repair-versions            # dry run; --apply to repair
+python manage_sources.py repair-versions --refetch  # also compare version 1 with the live page under today's extractor
+python manage_sources.py recheck-duplicates         # dry run: ask the configured LLM about recent cards never compared; --apply merges SAME_EVENT only
+python validate_openai_live.py                      # live OpenAI checks on real stored articles (no writes)
 ```
 
 `ingest` runs one cycle immediately. Otherwise the running scheduler picks up an enabled row on the next tick. Disabled rows are not fetched. Re-running `seed_sources.py` updates curated URLs and does not re-enable a source you disabled.

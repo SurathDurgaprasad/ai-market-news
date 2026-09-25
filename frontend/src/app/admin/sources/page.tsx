@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import { unstable_rethrow } from 'next/navigation';
 import { API_V1 } from '@/lib/api';
 import { formatUtcMeta } from '@/lib/time';
@@ -16,6 +17,8 @@ interface AdminSource {
   polling_tier: string | null;
   enabled: boolean;
 }
+
+export const metadata: Metadata = { title: 'Sources' };
 
 async function getSources(): Promise<AdminSource[] | null> {
   try {
@@ -44,7 +47,9 @@ function firstLine(value: string | null): string {
 export default async function AdminSourcesPage() {
   const sources = await getSources();
   const rows = (sources ?? []).slice().sort((a, b) => {
-    const rank = (s: AdminSource) => (s.health_status === 'failing' ? 0 : s.health_status === 'healthy' ? 2 : 1);
+    // Actionable first: failing, then degraded, healthy, and disabled last.
+    const rank = (s: AdminSource) =>
+      !s.enabled ? 3 : s.health_status === 'failing' ? 0 : s.health_status === 'healthy' ? 2 : 1;
     return rank(a) - rank(b) || a.name.localeCompare(b.name);
   });
   const th = 'px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-muted';
@@ -66,7 +71,33 @@ export default async function AdminSourcesPage() {
             <p className="font-semibold">Intelligence API unavailable</p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-md border border-line bg-surface">
+          <>
+          <ul className="divide-y divide-line rounded-md border border-line bg-surface md:hidden" aria-label="Source ingestion health">
+            {rows.length === 0 ? (
+              <li className="px-4 py-8 text-center text-sm text-muted">No sources are registered.</li>
+            ) : (
+              rows.map((source) => (
+                <li key={source.id} className="px-4 py-3 text-[13px]">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="min-w-0 truncate font-medium text-ink">{source.name}</p>
+                    <span className={`shrink-0 ${healthClass(source)}`}>
+                      {source.enabled ? source.health_status : 'disabled'}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    {source.tier} · {source.last_fetch_at ? `last fetch ${formatUtcMeta(source.last_fetch_at)}` : 'never fetched'}
+                    {source.consecutive_failures > 0 ? ` · ${source.consecutive_failures} consecutive failures` : ''}
+                  </p>
+                  {source.last_error_info ? (
+                    <p className="mt-1 text-[12px] text-warning">{firstLine(source.last_error_info)}</p>
+                  ) : source.last_ingest_summary ? (
+                    <p className="mt-1 text-[12px] text-muted">{source.last_ingest_summary}</p>
+                  ) : null}
+                </li>
+              ))
+            )}
+          </ul>
+          <div className="hidden overflow-x-auto rounded-md border border-line bg-surface md:block">
             <table className="min-w-full divide-y divide-line">
               <caption className="sr-only">Source ingestion health</caption>
               <thead className="bg-elevated">
@@ -117,6 +148,7 @@ export default async function AdminSourcesPage() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </main>
