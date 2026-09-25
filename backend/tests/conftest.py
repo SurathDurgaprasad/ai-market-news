@@ -2,6 +2,21 @@ import os
 import tempfile
 
 os.environ["TESTING"] = "1"
+
+# Provider credentials a normal test run could spend. Unless live tests were
+# explicitly requested, they are removed before the application reads its
+# settings, so no test (marked or not) can reach a paid provider: a real
+# provider built without a key has no client and fails closed.
+PROVIDER_CREDENTIALS = (
+    "OPENAI_API_KEY", "NVIDIA_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+)
+LIVE_REQUESTED = os.environ.get("RUN_LIVE_LLM_TESTS") == "1"
+if not LIVE_REQUESTED:
+    # app.core.config would otherwise copy them back from the Windows registry.
+    os.environ["LLM_CREDENTIALS_DISABLED"] = "1"
+    for _name in PROVIDER_CREDENTIALS:
+        os.environ.pop(_name, None)
 # Any real provider request a test makes is recorded, in a per-run ledger,
 # never the application's own logs/llm_usage.jsonl.
 os.environ.setdefault(
@@ -9,6 +24,14 @@ os.environ.setdefault(
 )
 
 import pytest
+
+from app.core.config import settings as _settings
+
+if not LIVE_REQUESTED:
+    # Also covers a backend/.env file, which pydantic reads without os.environ.
+    for _name in PROVIDER_CREDENTIALS:
+        if hasattr(_settings, _name):
+            setattr(_settings, _name, None)
 
 LIVE_MARKERS = ("live_nvidia", "live_openai")
 
@@ -20,7 +43,7 @@ def pytest_collection_modifyitems(config, items):
     being present in the environment is not consent to spend it, and a plain
     `pytest` must never make a network call to a language model.
     """
-    if os.environ.get("RUN_LIVE_LLM_TESTS") == "1":
+    if LIVE_REQUESTED:
         return
     skip = pytest.mark.skip(reason="live provider test: set RUN_LIVE_LLM_TESTS=1 to run")
     for item in items:

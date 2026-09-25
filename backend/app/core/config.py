@@ -8,8 +8,11 @@ def _hydrate_os_environ(*names: str) -> None:
     Copy User/Machine environment variables into os.environ when the process
     env is empty. IDE processes are often started before a newly set User
     variable is inherited. Never logs values.
+
+    LLM_CREDENTIALS_DISABLED=1 skips it: the test suite removes provider
+    keys on purpose and they must not come back from the registry.
     """
-    if os.name != "nt":
+    if os.name != "nt" or os.environ.get("LLM_CREDENTIALS_DISABLED") == "1":
         return
     try:
         import winreg

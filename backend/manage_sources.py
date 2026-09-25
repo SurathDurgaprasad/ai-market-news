@@ -259,6 +259,9 @@ def cmd_backfill_categories(args) -> int:
             applied = apply_category_backfill(db, rows)
             print(f"{applied} label(s) stored from {args.apply} ({sum(1 for r in rows if r.get('label'))} agreed in the file)")
             return 0
+        if args.run and os.path.exists(args.run):
+            print(f"{args.run} already exists; choose a new file so a reviewed dry run is never overwritten.")
+            return 2
         events = category_backfill_candidates(db, limit=args.limit)
         plan = estimate_category_backfill(events, args.batch)
         print(
@@ -326,11 +329,21 @@ def cmd_repair_digests(args) -> int:
 
 
 def cmd_rebuild_digest_card(args) -> int:
-    """--run FILE: two LLM requests, proposal saved, no writes. --apply FILE: store it, no requests."""
+    """
+    --run FILE: two LLM requests, proposal saved to FILE, no database write
+    (the session is never committed and is discarded on close).
+    --apply FILE: store a reviewed proposal, no requests.
+    """
     import json
 
     from app.core.consolidate import apply_digest_rebuild, propose_digest_rebuild
 
+    if args.run and not args.event:
+        print("--run needs --event ID; nothing was requested.")
+        return 2
+    if args.run and os.path.exists(args.run):
+        print(f"{args.run} already exists; choose a new file so a reviewed proposal is never overwritten.")
+        return 2
     db = _ready()
     try:
         if args.apply:

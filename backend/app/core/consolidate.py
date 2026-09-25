@@ -504,11 +504,14 @@ def estimate_category_backfill(events: list[Event], batch_size: int = CATEGORY_B
 
 
 def _classify_batch(llm, cards: list[tuple[str, str]], pause_seconds: float) -> dict:
-    """One batch, retried once after a pause (rate limits). Raises LlmUnavailableError after that."""
+    """
+    One batch, retried once after a pause (rate limits). Raises
+    LlmUnavailableError after that, and ProviderQuotaExhausted at once.
+    """
     import time
 
     from app.core.llm_usage import llm_subject
-    from app.core.providers.llm import LlmUnavailableError
+    from app.core.providers.llm import LlmUnavailableError, ProviderQuotaExhausted
 
     with llm_subject(f"category_backfill:{cards[0][0]}..{cards[-1][0]}"):
         for attempt in range(2):
@@ -517,6 +520,8 @@ def _classify_batch(llm, cards: list[tuple[str, str]], pause_seconds: float) -> 
                 if pause_seconds:
                     time.sleep(pause_seconds)
                 return answers
+            except ProviderQuotaExhausted:
+                raise  # no quota: every further request would fail too
             except LlmUnavailableError:
                 if attempt == 1:
                     raise

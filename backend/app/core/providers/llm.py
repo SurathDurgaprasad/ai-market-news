@@ -173,7 +173,8 @@ def _unavailable_on_any_error(fn):
         except LlmUnavailableError:
             raise
         except Exception as exc:
-            raise LlmUnavailableError(
+            error = ProviderQuotaExhausted if is_quota_exhausted(exc) else LlmUnavailableError
+            raise error(
                 f"{type(self).__name__}.{fn.__name__} failed: {type(exc).__name__}: {exc}"
             ) from exc
 
@@ -357,6 +358,33 @@ class LlmUnavailableError(RuntimeError):
     """Production path has no usable LLM. Do not emit TestLLM mock events."""
 
 
+class ProviderQuotaExhausted(LlmUnavailableError):
+    """
+    The account has no quota left (OpenAI `insufficient_quota`). Terminal:
+    retrying cannot succeed until someone adds credit, so neither tenacity
+    nor the SDK retries it and batch jobs stop at the first one.
+    """
+
+
+def is_quota_exhausted(exc: BaseException) -> bool:
+    """True for a provider 'no quota left' error anywhere in the exception chain."""
+    seen = 0
+    current: Optional[BaseException] = exc
+    while current is not None and seen < 8:
+        if isinstance(current, ProviderQuotaExhausted):
+            return True
+        code = getattr(current, "code", None)
+        body = getattr(current, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error") if isinstance(body.get("error"), dict) else body
+            code = code or error.get("code") or error.get("type")
+        if code == "insufficient_quota" or "insufficient_quota" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+        seen += 1
+    return False
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM Providers."""
 
@@ -438,7 +466,8 @@ class LLMProvider(ABC):
         except LlmUnavailableError:
             raise
         except Exception as exc:
-            raise LlmUnavailableError(f"classify_categories failed: {type(exc).__name__}") from exc
+            error = ProviderQuotaExhausted if is_quota_exhausted(exc) else LlmUnavailableError
+            raise error(f"classify_categories failed: {type(exc).__name__}") from exc
         wanted = {card_id for card_id, _ in cards}
         return {item.id: item.category for item in batch.items if item.id in wanted}
 
@@ -622,7 +651,13 @@ def coerce_structured_payload(data: dict, model_cls: Type[BaseModel]) -> dict:
 
 
 def nvidia_error_is_retryable(exc: BaseException) -> bool:
-    """Timeouts, rate limits, and transient HTTP failures. Auth and schema errors are not retried."""
+    """
+    Timeouts, rate limits, and transient HTTP failures. Auth and schema
+    errors are not retried, and neither is an exhausted quota: it is a 429
+    like a rate limit, but no retry can succeed.
+    """
+    if is_quota_exhausted(exc):
+        return False
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return True
     name = type(exc).__name__
@@ -705,7 +740,11 @@ class OpenAIProvider(LLMProvider):
         self.request_deadline_seconds = request_deadline_seconds
         self.operation_deadline_seconds = operation_deadline_seconds
         self.client = (
-            openai.OpenAI(api_key=key, timeout=60.0, http_client=http_client)
+            # max_retries=0: the SDK retries every 429, including
+            # insufficient_quota, and did so under tenacity's own retries
+            # (2 logical requests became 6 HTTP attempts). Tenacity alone
+            # retries transient errors, via nvidia_error_is_retryable.
+            openai.OpenAI(api_key=key, timeout=60.0, http_client=http_client, max_retries=0)
             if key
             else None
         )
