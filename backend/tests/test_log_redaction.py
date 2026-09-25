@@ -1,7 +1,7 @@
 """
 Regression coverage for the RedactSecretsFilter (app/core/logger.py),
 added after a real incident where an NVIDIA_API_KEY value was printed to
-a tool/session transcript (see docs/RED_TEAM_REPORT.md,
+a tool/session transcript (see docs/security-findings.md,
 SECRET-EXPOSURE-01). That specific incident was an operator shell command,
 not a logging call — this test instead proves the code-level defense: if
 any module ever logs a credential (by mistake, via %s interpolation or an

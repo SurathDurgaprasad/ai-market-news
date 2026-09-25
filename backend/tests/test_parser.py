@@ -309,7 +309,7 @@ def test_atom_next_link_is_detected_but_entries_still_parsed():
     assert extract_feed_next_url("") is None
 
 
-# INGEST-SILENT-01 (docs/RED_TEAM_REPORT.md): feedparser's own bozo flag
+# INGEST-SILENT-01 (docs/security-findings.md): feedparser's own bozo flag
 # does not catch an HTML page served where a feed should be — it parses
 # as bozo=False, entries=0, identical to a genuinely empty well-formed
 # feed. looks_like_feed() is the separate structural check that closes

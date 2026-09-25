@@ -46,7 +46,7 @@ SECURITY = {"none", "limited", "significant"}
 # wild", and pipeline.py's calibration override
 # (`if security == "none" and inf_sec != "none": security = inf_sec`)
 # would then silently overrule an LLM that correctly said security="none"
-# for a benign paper. See docs/RED_TEAM_REPORT.md IMPORTANCE-RESEARCH-01.
+# for a benign paper. See docs/security-findings.md IMPORTANCE-RESEARCH-01.
 # Deliberately narrow (academic-survey phrasing that real incident
 # reports essentially never use) to avoid the opposite failure — masking
 # a genuine incident that happens to mention "study" in passing.

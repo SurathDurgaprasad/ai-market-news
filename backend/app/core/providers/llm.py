@@ -29,7 +29,7 @@ class ProviderRequestTimeout(TimeoutError):
     This is deliberately distinct from httpx's own connect/read/write/pool
     timeouts: those bound the gap between I/O events, not a request's
     total duration (see backend/tests/test_nvidia_timeout_bound.py for a
-    deterministic proof, and docs/RED_TEAM_REPORT.md NVDA-01 for the
+    deterministic proof, and docs/security-findings.md NVDA-01 for the
     incident that prompted this). Subclasses TimeoutError so existing
     retryable-error classification (nvidia_error_is_retryable) treats it
     the same as any other transient timeout without special-casing.
@@ -155,7 +155,7 @@ def _unavailable_on_any_error(fn):
     article, for the rest of that source's feed. The source ends the
     cycle recorded health_status="healthy" (llm_blocked never gets set),
     indistinguishable from a source that was successfully polled and
-    simply had nothing newsworthy. See docs/RED_TEAM_REPORT.md
+    simply had nothing newsworthy. See docs/security-findings.md
     SCHED-OUTAGE-01 for the reproduction that found this.
 
     Schema/validation problems are NOT covered by this — those are
@@ -685,7 +685,7 @@ def nvidia_error_is_fatal_model(exc: BaseException) -> bool:
 # Hard ceilings on a single raw HTTP attempt (layer 1), independent of
 # each SDK's own timeout= (which only bounds per-phase I/O gaps, not
 # total call duration — see ProviderRequestTimeout's docstring above, and
-# docs/RED_TEAM_REPORT.md NVDA-01 for the incident and proof that
+# docs/security-findings.md NVDA-01 for the incident and proof that
 # motivated this), and on the whole retried operation (layer 3 — see
 # _with_operation_deadline). Applied uniformly across all real providers
 # so the abstraction actually behaves consistently, not just the one
@@ -719,7 +719,7 @@ class OpenAIProvider(LLMProvider):
     every real call. Never caught because OpenAI is not the configured
     production provider (NVIDIA is) and no existing test exercised this
     method against a real or equivalently-shaped client. See
-    docs/RED_TEAM_REPORT.md OPENAI-BROKEN-01. Rewriting to the manual
+    docs/security-findings.md OPENAI-BROKEN-01. Rewriting to the manual
     pattern (already proven working for two of the three real providers)
     avoids coupling correctness to the exact pinned SDK version at all,
     rather than just bumping to a newer one.
@@ -852,7 +852,7 @@ ProductionLLMProvider = OpenAIProvider
 # frontier hosted API. NVIDIA_OPERATION_DEADLINE_SECONDS is set generously
 # above the pre-existing implicit worst case (3 attempts x 100s + backoff
 # ~= 304s) specifically so this refactor does not change NVIDIA's observed
-# behavior — see PROVIDER-AGNOSTIC-01 in docs/RED_TEAM_REPORT.md ("NVIDIA
+# behavior — see PROVIDER-AGNOSTIC-01 in docs/security-findings.md ("NVIDIA
 # behavior remains unchanged except for the improved contract").
 NVIDIA_REQUEST_DEADLINE_SECONDS = 100.0
 NVIDIA_OPERATION_DEADLINE_SECONDS = 330.0
@@ -1244,7 +1244,7 @@ class BedrockProvider(LLMProvider):
     tests/test_bedrock_provider.py. What is NOT verified: an actual
     successful call against the real Bedrock API. Do not read passing
     tests here as proof of live Bedrock correctness — see
-    docs/RED_TEAM_REPORT.md PROVIDER-AGNOSTIC-01 for the explicit
+    docs/security-findings.md PROVIDER-AGNOSTIC-01 for the explicit
     verified/not-verified split.
     """
 

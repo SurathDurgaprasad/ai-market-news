@@ -296,7 +296,7 @@ def looks_like_feed(payload: str) -> bool:
     CMS migration. feedparser's own `bozo` flag does NOT catch that case:
     an HTML page is "well-formed enough" XML-adjacent content that `bozo`
     stays False and `entries` is simply empty, identical to a truly empty
-    but well-formed feed. See docs/RED_TEAM_REPORT.md INGEST-SILENT-01.
+    but well-formed feed. See docs/security-findings.md INGEST-SILENT-01.
 
     Deliberately simple (a root-tag substring check, not a full parse) —
     real feeds declare their root element within the first few KB, so

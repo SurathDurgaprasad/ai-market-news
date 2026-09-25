@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+logs/
+image_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/

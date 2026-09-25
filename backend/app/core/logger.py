@@ -1,7 +1,7 @@
 """
 Application logging setup, including secret redaction.
 
-Prompted by a real incident (see docs/RED_TEAM_REPORT.md, SECRET-EXPOSURE-01):
+Prompted by a real incident (see docs/security-findings.md, SECRET-EXPOSURE-01):
 a shell command printed a live NVIDIA_API_KEY value into a terminal/tool
 transcript. That specific incident was an operator-side command, not a
 logging call in this codebase — but it is exactly the failure mode this

@@ -10,7 +10,7 @@ class MockRedirectResponse:
     Usable as the context-manager result of `client.stream(...)` —
     fetch_url() streams (`with client.stream("GET", ...) as streamed:`),
     not client.get(), since INGEST-DECOMPRESSION-BOMB-01
-    (docs/RED_TEAM_REPORT.md): reading with an incrementally-capped
+    (docs/security-findings.md): reading with an incrementally-capped
     stream instead of a fully-materialized client.get() response is what
     actually closes that gap. Mocking must therefore patch
     `httpx.Client.stream`, not `httpx.Client.get`.

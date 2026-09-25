@@ -49,7 +49,7 @@ def test_origin_redirects_and_canonical_mismatch():
 
 def test_lookalike_domain_under_shared_public_suffix_is_not_same_site():
     """
-    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    CONFIRMED DEFECT (fixed this pass, docs/security-findings.md
     ORIGIN-PSL-01): same_registrable_host() used a naive last-2-labels
     comparison with no public-suffix awareness. bbc.co.uk and evil.co.uk
     both reduce to ("co", "uk") under that scheme and compared equal,
@@ -94,7 +94,7 @@ def test_aggregator_to_lookalike_couk_publisher_still_promotes_correctly():
 
 def test_jsonld_publisher_with_nested_logo_object_is_extracted():
     """
-    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    CONFIRMED DEFECT (fixed this pass, docs/security-findings.md
     ORIGIN-PSL-01): _JSONLD_PUBLISHER's regex used `[^}]*` between
     "publisher": { and "name", which stops at the FIRST closing brace.
     Real-world schema.org Organization/Publisher JSON-LD very commonly

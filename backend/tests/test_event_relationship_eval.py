@@ -753,7 +753,7 @@ def test_corpus_precision_recall_summary():
     is exactly the "test that could pass while the real implementation is
     broken" pattern flagged in the operating brief's Phase 1K. Fixed to
     additionally verify the tally hasn't silently drifted from the actual
-    test file (see docs/RED_TEAM_REPORT.md TEST-QUALITY-EVAL-SUMMARY-01):
+    test file (see docs/security-findings.md TEST-QUALITY-EVAL-SUMMARY-01):
     the counts below are cross-checked against the real number of
     `test_eval_*` functions currently defined in this module, so adding
     or removing a case without updating this summary now fails loudly.

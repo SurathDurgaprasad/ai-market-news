@@ -1,6 +1,6 @@
 """
 Root-cause investigation and regression coverage for NVDA-01
-(docs/RED_TEAM_REPORT.md): a live NVIDIA-provider test hung for 8+
+(docs/security-findings.md): a live NVIDIA-provider test hung for 8+
 minutes despite NVIDIAProvider constructing its openai client with
 `timeout=90.0`.
 
@@ -154,7 +154,7 @@ def test_classify_event_raises_bounded_error_not_unbounded_hang():
     # classify_event catches parse/validation errors and returns None; a
     # ProviderRequestTimeout is retryable so tenacity retries it up to 3
     # attempts (bounded) before propagating. As of SCHED-OUTAGE-01 (see
-    # docs/RED_TEAM_REPORT.md), the public classify_event() no longer lets
+    # docs/security-findings.md), the public classify_event() no longer lets
     # that raw ProviderRequestTimeout escape — _unavailable_on_any_error
     # normalizes it to LlmUnavailableError so pipeline.py's existing
     # `except LlmUnavailableError` handling (not a generic except that

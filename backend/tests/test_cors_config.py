@@ -1,5 +1,5 @@
 """
-Regression coverage for CORS-01 (docs/RED_TEAM_REPORT.md): the API used
+Regression coverage for CORS-01 (docs/security-findings.md): the API used
 to combine allow_origins=["*"] with allow_credentials=True, a known-bad
 CORS configuration. Verifies both the config-layer parsing and the
 actual middleware behavior against a real TestClient request.

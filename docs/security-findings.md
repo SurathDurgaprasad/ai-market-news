@@ -1,18 +1,10 @@
-# Red Team Report
+# Security findings
 
-Living document. Each finding is logged once discovered and updated in
-place as it moves through the lifecycle — never deleted, even after a fix,
-so the history of what was attacked and what was found stays visible.
+A record of the security and correctness findings made while hardening AI Market News, and how each was resolved. Code comments cite these finding IDs (for example `SCHED-OUTAGE-01`) next to the defences they introduced. For the current protections, read [security.md](security.md) first; this file is the history behind them.
 
-Status vocabulary: `OPEN FINDING`, `CONFIRMED`, `FIXED`, `KNOWN LIMITATION`,
-`NOT REPRODUCIBLE`.
+Entries were written at the time of each finding. They may mention components that have since been removed or replaced (such as the NVIDIA-first configuration or the unused Celery scaffolding); those statements describe the code as it was then.
 
-This is Session 1 of an ongoing loop. Findings below come from a first pass
-of direct code reading across the security-relevant modules plus one live
-test-suite run. **Active adversarial attack (writing new exploit inputs
-against a running instance) has not yet started** — that begins in the
-next phase of work. Do not read "no findings in section X" as "section X
-is secure"; read it as "section X has not been attacked yet."
+Status vocabulary: `OPEN FINDING`, `CONFIRMED`, `FIXED`, `KNOWN LIMITATION`, `NOT REPRODUCIBLE`.
 
 ---
 
@@ -1266,7 +1258,7 @@ whatever machine runs it.
   nuisance value — actively misleads anyone onboarding
 - **Area:** Phase 20 — documentation
 - **Status:** FIXED (session 2, 2026-09-21)
-- **Description:** `docs/ARCHITECTURE.md` and root `docker-compose.yml`
+- **Description:** `docs/architecture.md` and root `docker-compose.yml`
   describe PostgreSQL + pgvector + Redis + Celery + OIDC/SAML auth. The
   real, intentional system (confirmed by reading `backend/app/core/config.py`,
   which hardcodes SQLite and explicitly comments *"Do not point this at
@@ -1274,28 +1266,28 @@ whatever machine runs it.
   `docs/IMPLEMENTATION_STATUS.md` is similarly stale, describing core
   pipeline logic as "scaffolded"/"not started" when direct code reading
   shows working, tested implementations.
-- **Fix applied:** `docs/ARCHITECTURE.md`, `docs/INGESTION.md`,
-  `docs/DATA_MODEL.md` fully rewritten from the actual code, each claim
+- **Fix applied:** `docs/architecture.md`, `docs/ingestion.md`,
+  `docs/architecture.md` fully rewritten from the actual code, each claim
   labeled `CURRENT` / `PLANNED / FUTURE` / `NOT IMPLEMENTED`;
   `docker-compose.yml` rewritten to a single SQLite-backed `backend`
   service (no Postgres/Redis/Celery, and no fabricated frontend service
   referencing a Dockerfile that doesn't exist);
   `docs/PRODUCT_REQUIREMENTS.md` and `docs/ROADMAP.md` corrected in
-  place; `docs/SOURCE_REGISTRY.md` given an accurate current-vs-target
+  place; `docs/sources.md` given an accurate current-vs-target
   note; `docs/IMPLEMENTATION_STATUS.md` retired in favor of
-  `docs/ENGINEERING_STATUS.md`. Did not introduce Postgres/pgvector/
+  `docs/security-findings.md`. Did not introduce Postgres/pgvector/
   Redis/Celery/OIDC/Docker anywhere to match the old docs — corrected the
   docs to match the code instead, per instruction. Did not remove the
   legitimate future-direction content (vector clustering, horizontal
   scaling) — kept, explicitly labeled `PLANNED / FUTURE`, in
-  `docs/ARCHITECTURE.md` §8.
+  `docs/architecture.md` §8.
 - **Caveat:** the rewritten `docker-compose.yml` has not been verified
   with an actual `docker compose up` in this environment —
   `PARTIALLY VERIFIED`, not `VERIFIED`.
 - **Regression test:** N/A (documentation, not code behavior) — the
-  safeguard against re-drift is process, not a test: `docs/ARCHITECTURE.md`
+  safeguard against re-drift is process, not a test: `docs/architecture.md`
   now explicitly instructs that it should be checked against code, and
-  `docs/DATA_MODEL.md` says outright it should be "regenerated from code
+  `docs/architecture.md` says outright it should be "regenerated from code
   whenever the models change, not hand-maintained independently of it."
 
 ### TEST-ISOLATION-01 — Shared FastAPI `dependency_overrides` global leaked across test files
@@ -1464,7 +1456,7 @@ whatever machine runs it.
   by grep that nothing on the actual running application's code path
   imports `psycopg` at all; `celery`/`redis` are only imported by
   `backend/app/worker/celery_app.py`, which nothing else in the codebase
-  or test suite imports (fully dead code, see `docs/ARCHITECTURE.md` §6);
+  or test suite imports (fully dead code, see `docs/architecture.md` §6);
   `pgvector`'s two usages (`app/models/event.py`, `app/core/clustering.py`)
   are behind `except ImportError` fallbacks that a deliberate SQLite
   check (`if settings.get_database_url().startswith("sqlite"): raise

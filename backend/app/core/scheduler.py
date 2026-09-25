@@ -253,7 +253,7 @@ class IngestionScheduler:
                             # Without this check the source would be recorded
                             # health_status="healthy" indefinitely despite no
                             # longer serving a feed at all. See
-                            # docs/RED_TEAM_REPORT.md INGEST-SILENT-01.
+                            # docs/security-findings.md INGEST-SILENT-01.
                             raise ValueError(
                                 "Fetched content does not look like an RSS/Atom/RDF feed "
                                 "(no <rss>/<feed>/<rdf:RDF> root element found)"

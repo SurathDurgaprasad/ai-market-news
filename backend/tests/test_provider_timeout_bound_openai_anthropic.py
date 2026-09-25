@@ -1,5 +1,5 @@
 """
-NVDA-01 (docs/RED_TEAM_REPORT.md) was fixed for NVIDIAProvider first,
+NVDA-01 (docs/security-findings.md) was fixed for NVIDIAProvider first,
 since that's the actual configured production provider and the one that
 hung in a live test. This file proves the same fix was applied
 consistently to OpenAIProvider and AnthropicProvider — the provider
@@ -39,7 +39,7 @@ def test_openai_provider_enforces_hard_deadline_against_trickling_transport():
     )
 
     start = time.monotonic()
-    # As of SCHED-OUTAGE-01 (docs/RED_TEAM_REPORT.md), the raw
+    # As of SCHED-OUTAGE-01 (docs/security-findings.md), the raw
     # ProviderRequestTimeout no longer escapes the public classify_event()
     # — _unavailable_on_any_error normalizes it to LlmUnavailableError so
     # pipeline.py's LlmUnavailableError handling (not a generic except

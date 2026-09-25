@@ -94,7 +94,7 @@ def test_semantic_clustering_different_event_same_entity(db_session):
 
 def test_pipeline_contrasting_claims_do_not_fast_path_merge(db_session):
     """
-    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    CONFIRMED DEFECT (fixed this pass, docs/security-findings.md
     DEDUP-CONTRADICTION-01), end-to-end through the real pipeline/DB: two
     articles reporting OPPOSITE claims about H200 chip production ("on
     track" vs "behind"), with a long near-identical shared title and the

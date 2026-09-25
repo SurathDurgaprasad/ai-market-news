@@ -1,38 +1,21 @@
-# Local Docker setup matching the actual architecture (see docs/ARCHITECTURE.md):
-# FastAPI backend + SQLite (file-backed, no separate DB service). No
-# Postgres, Redis, or Celery — those appear in docs/ARCHITECTURE.md §8 as
-# a possible future scaling direction, not as something this compose file
-# should pretend already exists.
-#
-# The backend's in-process APScheduler (see backend/app/core/scheduler.py)
-# handles ingestion scheduling; no separate worker service is needed.
-#
-# The frontend has no Dockerfile yet (NOT IMPLEMENTED) — run it locally
-# with `npm run dev` (or `npm run build && npm start`) from frontend/,
-# pointed at this backend's port 8000. Add a frontend service here once a
-# Dockerfile exists for it; a service block referencing a nonexistent
-# Dockerfile would just reintroduce the "describes infrastructure that
-# doesn't exist" problem this file was rewritten to fix.
+# Backend only: FastAPI + SQLite in one container, with the scheduler in
+# process. The frontend runs separately (see docs/deployment.md).
+# Provider keys come from your shell or an env file you do not commit.
 
 services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:///./data/ai_platform.db
-      - LLM_PROVIDER=nvidia
-      # Defaults to http://localhost:3000 (see backend/app/core/config.py)
-      # for local dev; override to the frontend's real origin(s) here for
-      # any other deployment. No wildcard — see docs/RED_TEAM_REPORT.md
-      # CORS-01.
-      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-      # NVIDIA_API_KEY must be supplied by the environment (.env, shell,
-      # or `docker compose run -e`), never hardcoded here.
+      - DATABASE_URL=sqlite:////app/data/ai_platform.db
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-1}
     volumes:
-      - ./backend/app:/app/app
       - backend_data:/app/data
 
 volumes:

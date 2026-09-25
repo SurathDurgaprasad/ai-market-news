@@ -92,7 +92,7 @@ def test_one_slow_source_delays_later_sources_in_the_same_cycle(db_session):
     # MEASUREMENT 2: the slow source's delay is fully absorbed into the total
     # cycle duration — nothing bounds or skips it. This is the concrete,
     # measured confirmation of the architectural characteristic already
-    # flagged (unmeasured) in docs/ENGINEERING_STATUS.md's Phase 1A section.
+    # flagged (unmeasured) in docs/security-findings.md's Phase 1A section.
     assert cycle_duration >= SLOW_SECONDS, (
         f"cycle completed in {cycle_duration:.2f}s, faster than the slow source's own "
         f"{SLOW_SECONDS}s fetch delay — expected the delay to be fully absorbed, "

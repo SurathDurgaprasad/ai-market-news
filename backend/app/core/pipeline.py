@@ -474,7 +474,7 @@ class IntelligencePipeline:
                 # escaping here is treated the same way an outage is —
                 # never silently counted as an ordinary rejected article,
                 # which would make a real outage indistinguishable from a
-                # quiet news day. See docs/RED_TEAM_REPORT.md SCHED-OUTAGE-01.
+                # quiet news day. See docs/security-findings.md SCHED-OUTAGE-01.
                 self.last_outcome = "llm_unavailable"
                 logger.error("LLM raised an unexpected error for %s (treated as unavailable): %s", url, exc)
                 raise LlmUnavailableError(f"classify_event failed: {type(exc).__name__}: {exc}") from exc
@@ -600,7 +600,7 @@ class IntelligencePipeline:
                             raise
                         except Exception as exc:
                             # Same defense-in-depth as classify_event — see
-                            # docs/RED_TEAM_REPORT.md SCHED-OUTAGE-01.
+                            # docs/security-findings.md SCHED-OUTAGE-01.
                             # Also load-bearing for merge correctness: an
                             # outage silently treated as RelationshipResult
                             # DIFFERENT_EVENT (rather than aborting) would
@@ -651,7 +651,7 @@ class IntelligencePipeline:
                     raise
                 except Exception as exc:
                     # Same defense-in-depth as classify_event above — see
-                    # docs/RED_TEAM_REPORT.md SCHED-OUTAGE-01.
+                    # docs/security-findings.md SCHED-OUTAGE-01.
                     self.last_outcome = "llm_unavailable"
                     logger.error("LLM raised an unexpected error for %s (treated as unavailable): %s", url, exc)
                     raise LlmUnavailableError(f"summarize_event failed: {type(exc).__name__}: {exc}") from exc

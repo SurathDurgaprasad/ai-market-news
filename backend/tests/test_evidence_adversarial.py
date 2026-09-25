@@ -20,7 +20,7 @@ EXISTS in the source, not that it means what it's being used to mean):
 This module previously had a `test_evidence_document_guarantees` function
 whose entire body was a docstring followed by `pass` — it documented
 these guarantees in prose but verified nothing (see
-docs/RED_TEAM_REPORT.md TEST-QUALITY-EVAL-SUMMARY-01 for the sibling
+docs/security-findings.md TEST-QUALITY-EVAL-SUMMARY-01 for the sibling
 finding in test_event_relationship_eval.py). Replaced with this module
 docstring plus the cookie-banner case below, which is the one
 Phase-1G-named attack this file didn't already cover behaviorally.

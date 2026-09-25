@@ -128,7 +128,7 @@ def test_reject_oversized_respects_content_length():
     Fast-path rejection using the Content-Length header alone, before any
     body is read. Function renamed/split from the original
     `_reject_oversized` — see INGEST-DECOMPRESSION-BOMB-01
-    (docs/RED_TEAM_REPORT.md) for why a single post-hoc length check was
+    (docs/security-findings.md) for why a single post-hoc length check was
     replaced with this pre-read header check plus a separate streaming,
     incrementally-capped body read (_read_body_with_cap, tested below).
     """

@@ -169,7 +169,7 @@ def test_same_model_titles_are_safe_lexical_matches():
 
 def test_hyphenated_and_fused_product_codes_are_not_a_false_conflict():
     """
-    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    CONFIRMED DEFECT (fixed this pass, docs/security-findings.md
     DEDUP-MARKER-NOTATION-01): extract_event_markers extracted a bare
     "num:5" marker for the hyphenated "GPT-5" but a "code:gpt5" marker for
     the fused "GPT5" — disjoint sets for the same product, so two outlets
@@ -195,7 +195,7 @@ def test_hyphenated_and_fused_product_codes_are_not_a_false_conflict():
 
 def test_contrasting_claims_prevent_false_fast_path_merge():
     """
-    CONFIRMED DEFECT (fixed this pass, docs/RED_TEAM_REPORT.md
+    CONFIRMED DEFECT (fixed this pass, docs/security-findings.md
     DEDUP-CONTRADICTION-01): the marker-conflict check only detects
     DISAGREEING numeric/code markers, not semantic contradiction in the
     surrounding prose. Two articles making OPPOSITE factual claims about

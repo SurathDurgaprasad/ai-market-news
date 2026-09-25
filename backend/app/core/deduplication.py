@@ -119,7 +119,7 @@ def extract_event_markers(title: str) -> set[str]:
     # directly before this fix: extract_event_markers("GPT-5 released")
     # returned {"num:5"} while extract_event_markers("GPT5 released")
     # returned {"code:gpt5"} — disjoint sets, so the marker-conflict check
-    # flagged them as different events. See docs/RED_TEAM_REPORT.md.
+    # flagged them as different events. See docs/security-findings.md.
     # Added alongside the existing markers (not instead of) so the
     # unseparated form's own extraction (H200, B200, ...) is untouched.
     for prefix, digits in _CODE_SEPARATOR_RE.findall(t):
@@ -192,7 +192,7 @@ def titles_have_contrasting_claims(title1: str, title2: str) -> bool:
     same subject — the specific gap numeric/code markers cannot see, since
     "H200 production on track" and "H200 production behind" share the exact
     same code marker while contradicting each other. Two independent,
-    directly reproduced signals (docs/RED_TEAM_REPORT.md
+    directly reproduced signals (docs/security-findings.md
     DEDUP-CONTRADICTION-01):
 
     - a curated antonym/contrast phrase pair present one-per-title

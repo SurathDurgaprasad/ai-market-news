@@ -313,7 +313,7 @@ FIXTURES = {
                    "This is not an availability announcement.",
         "published_at": "2026-09-18T12:10:00Z"
     },
-    # DEDUP-CONTRADICTION-01 (docs/RED_TEAM_REPORT.md): near-identical, long,
+    # DEDUP-CONTRADICTION-01 (docs/security-findings.md): near-identical, long,
     # shared-marker (H200) titles asserting OPPOSITE claims — these must NOT
     # fast-path merge on title lexical similarity alone, unlike the
     # conflicting_facts_* pair above (whose titles are dissimilar enough to

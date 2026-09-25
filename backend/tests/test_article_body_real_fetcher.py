@@ -2,7 +2,7 @@
 Phase 1B, second attack pass, Area D (article_body enrichment path).
 
 Explicit instruction for this area: do not assume the decompression-bomb
-fix (INGEST-DECOMPRESSION-BOMB-01, docs/RED_TEAM_REPORT.md) is inherited
+fix (INGEST-DECOMPRESSION-BOMB-01, docs/security-findings.md) is inherited
 by app/core/article_body.py's enrich_article() merely because it calls a
 fetch_fn that defaults to app.core.fetcher.fetch_url in production
 (app/core/pipeline.py). Every existing test in test_article_body.py

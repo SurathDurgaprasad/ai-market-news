@@ -103,7 +103,7 @@ def same_registrable_host(a: str, b: str) -> bool:
     both reduce to `("co", "uk")` and would wrongly compare equal, even
     though `.co.uk` is a public suffix, not a registrable domain, and
     these are two unrelated sites. Reproduced directly against this
-    function before fixing. See docs/RED_TEAM_REPORT.md for the finding
+    function before fixing. See docs/security-findings.md for the finding
     this fix addresses.
     """
     def parts(host: str) -> tuple[str, ...]:

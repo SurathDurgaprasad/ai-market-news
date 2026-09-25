@@ -64,7 +64,7 @@ def test_importance_security_keyword_in_harmless_research():
     to overrule an LLM that correctly said security="none" for a benign
     paper — a real, end-to-end exploitable false positive, not just an
     inaccurate helper function. Fixed via _VULN_RESEARCH_SURVEY_RE in
-    app/core/importance.py (see docs/RED_TEAM_REPORT.md
+    app/core/importance.py (see docs/security-findings.md
     IMPORTANCE-RESEARCH-01 and
     tests/test_importance_research_vs_incident.py for the end-to-end
     pipeline reproduction/regression test). This test now asserts the

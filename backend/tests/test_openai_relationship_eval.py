@@ -1,6 +1,6 @@
 """
 Real OpenAI semantic evaluation harness — PROVIDER-AGNOSTIC-01
-(docs/RED_TEAM_REPORT.md).
+(docs/security-findings.md).
 
 Deliberately modeled on test_nvidia_relationship_eval.py's structure and
 `_eval()` pattern (same result-record shape, same TP/TN/FP/FN scoring, same
@@ -13,7 +13,7 @@ a classify_event() case and a summarize_event() grounding case.
 Why this file exists rather than parametrizing the NVIDIA one: OpenAI is
 now this project's fast development/live-semantic-validation provider
 (NVIDIA remains the unchanged production default — see
-docs/ARCHITECTURE.md). Two Fairwind-neighbor cases run live against
+docs/architecture.md). Two Fairwind-neighbor cases run live against
 NVIDIA both timed out at the full retry budget rather than returning a
 verdict; this file's job is to get real semantic answers for those
 specific cases (among others) against a provider that's actually fast
@@ -74,7 +74,7 @@ pytestmark = [
     # hardcoded guess here previously caused a mismatched safety net to
     # fire before the provider's own bounded retry logic finished on a
     # slow-but-not-hung NVIDIA call — see NVDA-01 in
-    # docs/RED_TEAM_REPORT.md; deriving from the constant avoids repeating
+    # docs/security-findings.md; deriving from the constant avoids repeating
     # that exact mistake for OpenAI).
     pytest.mark.timeout(int(3 * OPENAI_OPERATION_DEADLINE_SECONDS + 60)),
 ]
@@ -251,7 +251,7 @@ def test_openai_H_security_confirmation(openai_provider):
 
 def test_openai_FW2_product_integrates_model(openai_provider):
     """Case 5a: Fairwind-neighbor — product integrates model vs model release.
-    Ran live against NVIDIA first (see docs/RED_TEAM_REPORT.md
+    Ran live against NVIDIA first (see docs/security-findings.md
     PROVIDER-AGNOSTIC-01) and timed out at the full retry budget without
     returning a verdict — this is that case's first real semantic answer."""
     article = (
@@ -290,7 +290,7 @@ def test_openai_FW4_capability_announcement_using_model(openai_provider):
 
 
 # ── classify_event case: Case 6, benign research must NOT become a
-# security incident (IMPORTANCE-RESEARCH-01, docs/RED_TEAM_REPORT.md) ─────
+# security incident (IMPORTANCE-RESEARCH-01, docs/security-findings.md) ─────
 
 def test_openai_classify_event_benign_vulnerability_research_not_incident(openai_provider):
     """
@@ -396,7 +396,7 @@ def test_openai_corpus_summary():
     """
     Aggregate results after all OpenAI live cases have run. Computed from
     the ACTUAL _results accumulated by the tests above — not hardcoded
-    (see docs/RED_TEAM_REPORT.md TEST-QUALITY-EVAL-SUMMARY-01 for why that
+    (see docs/security-findings.md TEST-QUALITY-EVAL-SUMMARY-01 for why that
     distinction matters and what it looked like to get this wrong).
     Reports actual results; does not assert a minimum precision, since a
     single bounded run is not a production-accuracy claim.

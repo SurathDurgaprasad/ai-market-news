@@ -63,7 +63,7 @@ def main() -> None:
         elif name == "openai":
             assert isinstance(provider, (OpenAIProvider, ProductionLLMProvider))
         print("STATE: production LLM configured.")
-        print("This script does not spend tokens. Run validate_nvidia_live.py for a real ingest.")
+        print("This script does not spend tokens. Run validate_openai_live.py for live checks against stored articles.")
         return
 
     print(f"FAILED: unexpected mode {mode}")

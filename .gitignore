@@ -27,3 +27,7 @@ backend/tests/out.log
 Thumbs.db
 .vscode/
 .idea/
+
+# Local IDE / agent runtime state
+.claude/
+.vscode/

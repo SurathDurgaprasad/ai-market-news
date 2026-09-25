@@ -1,6 +1,6 @@
 """
 Phase 1B, invariant 6 (response size limits) — INGEST-DECOMPRESSION-BOMB-01
-(docs/RED_TEAM_REPORT.md).
+(docs/security-findings.md).
 
 Reproduced directly (not assumed) before fixing: a 48KB gzip-compressed
 payload decompressing to 50MB was fully materialized in memory via
