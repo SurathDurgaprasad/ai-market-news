@@ -5,13 +5,13 @@ import Link from 'next/link';
 import { factualSummary, formatUtcCardTime, formatUtcWhen } from '@/lib/time';
 import { displaySource, evidenceLabel, type SourceRef } from '@/lib/sources';
 import {
-  cardImageClass,
   entityPreview,
   importanceMeta,
   shouldShowCardImage,
   type ImageRole,
 } from '@/lib/importance';
 import { safeHttpUrl } from '@/lib/urls';
+import { CategoryTag } from '@/components/ui';
 
 export interface EventCardData {
   id: string;
@@ -44,7 +44,6 @@ export const EventCard: React.FC<{
   const showImage =
     !imageFailed && shouldShowCardImage(event.image_url, event.image_role, tier.key);
   const safeImageUrl = showImage ? safeHttpUrl(event.image_url, { keepQuery: true }) : undefined;
-  const imageClass = cardImageClass(event.image_role, tier.image);
   const sourceHref =
     safeHttpUrl(event.article_url) || safeHttpUrl(source?.url) || safeHttpUrl(event.primary_source?.url);
   const sourceLabel = evidenceLabel({ url: sourceHref, tier: source?.tier });
@@ -58,41 +57,46 @@ export const EventCard: React.FC<{
 
   return (
     <article
-      className={`intel-card group relative flex h-full flex-col overflow-hidden rounded-md border transition-colors hover:border-muted/60 ${tier.card} ${tier.accent}`}
+      className={`intel-card group relative flex h-full flex-col overflow-hidden border ${tier.card} ${tier.accent}`}
     >
       <Link
         href={`/events/${event.id}`}
         className="flex min-h-0 flex-1 flex-col rounded-[inherit] focus-visible:outline-offset-[-2px]"
       >
-        {safeImageUrl ? (
-          <div className={`relative w-full overflow-hidden border-b border-line bg-elevated ${imageClass}`}>
-            <img
-              src={safeImageUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              className="absolute inset-0 h-full w-full object-cover"
-              onError={() => setImageFailed(true)}
-            />
-          </div>
-        ) : null}
-
         <div className={`flex flex-1 flex-col ${isMinor ? 'px-4 pt-3.5' : 'px-4 pt-4'}`}>
-          <div className="mb-2 flex items-baseline justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em]">
-            <span className="min-w-0 truncate">
+          <div className="mb-2 flex items-baseline justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.12em]">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">
+              <CategoryTag category={event.category} />
               <span className={tier.badge}>{tier.label}</span>
-              {event.category ? <span className="text-muted"> · {event.category}</span> : null}
-              {updated ? <span className="text-accent"> · Updated</span> : null}
+              {updated ? (
+                <span className="rounded-[3px] border border-accent/40 px-1 py-px text-[10px] text-accent">Updated</span>
+              ) : null}
             </span>
             <time className="shrink-0 font-medium normal-case tracking-wide text-muted" dateTime={stamp}>
               {displayTime}
             </time>
           </div>
 
-          <Heading className={`mb-2 line-clamp-3 font-medium tracking-tight text-ink group-hover:text-accent ${tier.title}`}>
-            {event.headline}
-          </Heading>
+          {/* Text first; the image is an identifying thumbnail at one fixed ratio,
+              so cards with and without images align in every row. */}
+          <div className="flex items-start gap-3">
+            <Heading className={`mb-2 line-clamp-3 min-w-0 flex-1 font-semibold tracking-tight text-ink group-hover:text-accent ${tier.title}`}>
+              {event.headline}
+            </Heading>
+            {safeImageUrl ? (
+              <div className="relative mt-0.5 h-16 w-24 shrink-0 overflow-hidden rounded-[4px] border border-line bg-elevated">
+                <img
+                  src={safeImageUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="absolute inset-0 h-full w-full object-cover"
+                  onError={() => setImageFailed(true)}
+                />
+              </div>
+            ) : null}
+          </div>
 
           {summary ? (
             <p

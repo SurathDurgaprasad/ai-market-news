@@ -171,6 +171,8 @@ describe('homepage', () => {
     mockFetch({ '/events': new Error('ECONNREFUSED') });
     const markup = html(await Home());
     expect(markup).toContain('Intelligence API unavailable');
+    expect(markup).toContain('API unreachable');
+    expect(markup).not.toContain('>Live<');
   });
 });
 
@@ -222,5 +224,18 @@ describe('player page', () => {
     await expect(PlayerPage({ params: Promise.resolve({ slug: 'not-a-player' }) })).rejects.toThrow(
       'NEXT_NOT_FOUND',
     );
+  });
+});
+
+describe('sources page', () => {
+  it('turns scheduler counters into a readable result', async () => {
+    const { readableIngest } = await import('@/lib/sources');
+    expect(readableIngest('discovered=30 created=1 linked=0 rejected=19 duplicates=10 pending=0 llm_errors=0')).toBe(
+      '30 in feed · 1 new · 0 merged · 10 already known · 19 out of scope',
+    );
+    expect(readableIngest('discovered=20 created=0 linked=0 rejected=0 duplicates=20 pending=0 llm_errors=0')).toBe(
+      '20 in feed · nothing new · 20 already known',
+    );
+    expect(readableIngest(null)).toBe('—');
   });
 });

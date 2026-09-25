@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { unstable_rethrow } from 'next/navigation';
 import { API_V1 } from '@/lib/api';
 import { formatUtcMeta } from '@/lib/time';
+import { readableIngest } from '@/lib/sources';
 
 interface AdminSource {
   id: string;
@@ -39,6 +40,16 @@ function healthClass(source: AdminSource): string {
   return 'text-warning';
 }
 
+function HealthPill({ source }: { source: AdminSource }) {
+  const label = source.enabled ? source.health_status : 'disabled';
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[12.5px] font-medium ${healthClass(source)}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
 // Error strings from the fetcher can carry a long help URL; the first line is the reason.
 function firstLine(value: string | null): string {
   return (value ?? '').split('\n')[0].trim();
@@ -64,6 +75,23 @@ export default async function AdminSourcesPage() {
             Ingestion health for the registry. Add or disable a source with manage_sources.py; the scheduler
             picks it up on the next tick. Times in UTC.
           </p>
+          {sources ? (
+            <dl className="mt-4 flex flex-wrap gap-2">
+              {(
+                [
+                  ['Healthy', rows.filter((r) => r.enabled && r.health_status === 'healthy').length, 'text-success'],
+                  ['Degraded', rows.filter((r) => r.enabled && r.health_status !== 'healthy' && r.health_status !== 'failing').length, 'text-warning'],
+                  ['Failing', rows.filter((r) => r.enabled && r.health_status === 'failing').length, 'text-danger'],
+                  ['Disabled', rows.filter((r) => !r.enabled).length, 'text-muted'],
+                ] as const
+              ).map(([label, count, tone]) => (
+                <div key={label} className="rounded-[var(--radius-card)] border border-line bg-surface px-3.5 py-2">
+                  <dt className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">{label}</dt>
+                  <dd className={`tabular text-[18px] font-semibold ${count > 0 ? tone : 'text-muted'}`}>{count}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
         </header>
 
         {sources === null ? (
@@ -80,9 +108,7 @@ export default async function AdminSourcesPage() {
                 <li key={source.id} className="px-4 py-3 text-[13px]">
                   <div className="flex items-baseline justify-between gap-3">
                     <p className="min-w-0 truncate font-medium text-ink">{source.name}</p>
-                    <span className={`shrink-0 ${healthClass(source)}`}>
-                      {source.enabled ? source.health_status : 'disabled'}
-                    </span>
+                    <span className="shrink-0"><HealthPill source={source} /></span>
                   </div>
                   <p className="mt-0.5 text-[12px] text-muted">
                     {source.tier} · {source.last_fetch_at ? `last fetch ${formatUtcMeta(source.last_fetch_at)}` : 'never fetched'}
@@ -91,7 +117,7 @@ export default async function AdminSourcesPage() {
                   {source.last_error_info ? (
                     <p className="mt-1 text-[12px] text-warning">{firstLine(source.last_error_info)}</p>
                   ) : source.last_ingest_summary ? (
-                    <p className="mt-1 text-[12px] text-muted">{source.last_ingest_summary}</p>
+                    <p className="mt-1 text-[12px] text-muted">{readableIngest(source.last_ingest_summary)}</p>
                   ) : null}
                 </li>
               ))
@@ -125,9 +151,7 @@ export default async function AdminSourcesPage() {
                       </td>
                       <td className={`${td} text-secondary`}>{source.tier}</td>
                       <td className={`${td} whitespace-nowrap`}>
-                        <span className={healthClass(source)}>
-                          {source.enabled ? source.health_status : 'disabled'}
-                        </span>
+                        <HealthPill source={source} />
                         {source.consecutive_failures > 0 ? (
                           <p className="text-[12px] text-muted">{source.consecutive_failures} consecutive failures</p>
                         ) : null}
@@ -139,7 +163,7 @@ export default async function AdminSourcesPage() {
                         {source.last_error_info ? (
                           <span className="text-warning">{firstLine(source.last_error_info)}</span>
                         ) : (
-                          source.last_ingest_summary ?? '—'
+                          readableIngest(source.last_ingest_summary)
                         )}
                       </td>
                     </tr>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { EventCard, type EventCardData } from "@/components/EventCard";
+import { EventRow } from "@/components/EventRow";
 import type { MarketOverviewData, PlayerActivity } from "@/components/MarketOverview";
 import { API_V1 } from "@/lib/api";
 import { formatUtcWhen } from "@/lib/time";
@@ -110,10 +111,25 @@ export default async function PlayerPage({
         ) : events.length === 0 ? (
           <p className="text-sm text-muted">No developments attributed to {name} this week.</p>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {events.map((event) => (
-              <EventCard key={event.id} event={event} headingLevel="h2" withDate />
-            ))}
+          <div className="space-y-4">
+            {events.some((event) => event.importance_score >= 70) ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {events
+                  .filter((event) => event.importance_score >= 70)
+                  .map((event) => (
+                    <EventCard key={event.id} event={event} headingLevel="h2" withDate />
+                  ))}
+              </div>
+            ) : null}
+            {events.some((event) => event.importance_score < 70) ? (
+              <ul className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface">
+                {events
+                  .filter((event) => event.importance_score < 70)
+                  .map((event) => (
+                    <EventRow key={event.id} event={event} withDate headingLevel="h2" />
+                  ))}
+              </ul>
+            ) : null}
           </div>
         )}
       </div>

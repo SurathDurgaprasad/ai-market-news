@@ -24,7 +24,7 @@ from typing import Iterable, Optional
 # A descriptor standing in for the actor. Singular nouns are replaced by the
 # name ("Startup Raises" -> "Snorkel AI Raises"); people nouns keep the noun
 # ("Researchers Develop" -> "MIT Researchers Develop") so the verb still agrees.
-_SINGULAR = r"startup|company|firm|lab|unicorn|chipmaker|developer|maker|provider|vendor"
+_SINGULAR = r"startup|company|firm|lab|unicorn|chipmaker|biotech|developer|maker|provider|vendor"
 _PEOPLE = r"researchers|scientists|engineers"
 _QUALIFIER = r"(?:(?:ai|artificial intelligence|tech|chip|robotics|software|data|defense|healthcare|fintech|[a-z]+-based)\s+)?"
 # The placeholder must be the actor, i.e. directly followed by a verb.

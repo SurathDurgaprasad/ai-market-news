@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { unstable_rethrow } from 'next/navigation';
 import { EventCard, type EventCardData } from '@/components/EventCard';
+import { EventRow } from '@/components/EventRow';
+import { SectionHeading } from '@/components/ui';
 import {
   MarketOverview,
   type IngestionStatus,
@@ -13,6 +15,8 @@ import { ageHours, formatUtcInstrument, groupFeedByRecency, latestCreatedAt } fr
 // Ingestion runs every few minutes. Beyond this, "Live" would be a claim
 // the pipeline cannot back.
 const STALE_AFTER_HOURS = 6;
+// Significant and Major developments get a full card; the rest form the dense stream.
+const CARD_MIN_IMPORTANCE = 70;
 
 async function getOverview(): Promise<MarketOverviewData | null> {
   try {
@@ -41,7 +45,7 @@ async function getEvents(): Promise<EventCardData[] | null> {
 }
 
 type Freshness = {
-  state: 'live' | 'delayed' | 'paused';
+  state: 'live' | 'delayed' | 'paused' | 'offline';
   label: string;
   detail: string;
 };
@@ -88,6 +92,14 @@ const STATE_CLASS: Record<Freshness['state'], { text: string; dot: string }> = {
   live: { text: 'text-success', dot: 'bg-success' },
   delayed: { text: 'text-warning', dot: 'bg-warning' },
   paused: { text: 'text-warning', dot: 'bg-warning' },
+  offline: { text: 'text-danger', dot: 'bg-danger' },
+};
+
+// The overview carries ingestion state; without it the page must still say so.
+const OFFLINE: Freshness = {
+  state: 'offline',
+  label: 'API unreachable',
+  detail: 'Ingestion status and developments cannot be loaded right now.',
 };
 
 export default async function Home() {
@@ -95,7 +107,7 @@ export default async function Home() {
   // The API's own clock computed the overview windows; the feed groups by the same instant.
   const nowIso = overview?.as_of ?? new Date().toISOString();
   const nowMs = Date.parse(nowIso);
-  const status = freshness(overview?.ingestion, nowMs);
+  const status = overview ? freshness(overview.ingestion, nowMs) : OFFLINE;
   const latestCreated = events && events.length > 0 ? latestCreatedAt(events) : '';
   const sections = events && events.length > 0 ? groupFeedByRecency(events, nowIso) : [];
   const failing = overview?.ingestion?.sources_failing ?? 0;
@@ -109,20 +121,22 @@ export default async function Home() {
       >
         Skip to latest developments
       </a>
-      <div className="intel-shell py-6 lg:py-8">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-x-8 gap-y-4 border-b border-line pb-5">
+      <div className="intel-shell py-5 lg:py-6">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-x-8 gap-y-4 border-b border-line pb-5">
           <div className="min-w-0">
-            <h1 className="text-[1.6rem] font-semibold leading-tight tracking-tight text-ink md:text-[1.85rem]">
+            <p className="intel-kicker">AI market intelligence</p>
+            <h1 className="mt-1 text-[1.6rem] font-semibold leading-tight tracking-[-0.015em] text-ink md:text-[1.9rem]">
               What is changing in AI
             </h1>
-            <p className="mt-1 text-[13px] text-muted">
+            <p className="tabular mt-1 text-[13px] text-muted">
               {events ? `${events.length} canonical ${events.length === 1 ? 'development' : 'developments'} this week` : 'This week'}
               {' · '}repeated coverage counts once · times in UTC
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div className="flex flex-wrap items-center gap-y-2">
+            {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
             {status ? (
-              <div className="min-w-0" role="status">
+              <div className="min-w-0 rounded-[var(--radius-card)] border border-line bg-surface px-3.5 py-2" role="status">
                 <p className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] ${STATE_CLASS[status.state].text}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${STATE_CLASS[status.state].dot}`} aria-hidden="true" />
                   {status.label}
@@ -137,18 +151,18 @@ export default async function Home() {
                 ) : null}
               </div>
             ) : null}
-            {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
           </div>
         </div>
 
         {overview ? <MarketOverview data={overview} stale={status?.state !== 'live'} /> : null}
 
-        <div id="latest-developments" className="mb-5 scroll-mt-4 border-b border-line pb-2.5">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">This week</p>
-          <h2 className="mt-0.5 text-[17px] font-semibold tracking-tight text-ink">Latest developments</h2>
-          <p className="mt-0.5 text-[12px] text-muted">
-            Newest first. Open a card for evidence and coverage; the source link opens the original.
-          </p>
+        <div id="latest-developments" className="scroll-mt-16">
+          <SectionHeading
+            id="latest-heading"
+            kicker="This week"
+            title="Latest developments"
+            note="Newest first. Significant developments as cards, the rest as a compact stream. Open one for evidence and coverage; the source link opens the original."
+          />
         </div>
 
         {!events ? (
@@ -177,20 +191,34 @@ export default async function Home() {
                   ) : null}
                 </div>
                 <div className="space-y-7">
-                  {section.days.map((day) => (
-                    <div key={day.key}>
-                      {day.label ? (
-                        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
-                          {day.label}
-                        </p>
-                      ) : null}
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                        {day.events.map((event) => (
-                          <EventCard key={event.id} event={event} headingLevel="h4" />
-                        ))}
+                  {section.days.map((day) => {
+                    const prominent = day.events.filter((event) => event.importance_score >= CARD_MIN_IMPORTANCE);
+                    const stream = day.events.filter((event) => event.importance_score < CARD_MIN_IMPORTANCE);
+                    return (
+                      <div key={day.key} className="space-y-3">
+                        {day.label ? (
+                          <p className="intel-kicker">{day.label}</p>
+                        ) : null}
+                        {prominent.length > 0 ? (
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                            {prominent.map((event) => (
+                              <EventCard key={event.id} event={event} headingLevel="h4" />
+                            ))}
+                          </div>
+                        ) : null}
+                        {stream.length > 0 ? (
+                          <ul
+                            className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface"
+                            aria-label={`${stream.length} more ${stream.length === 1 ? 'development' : 'developments'}`}
+                          >
+                            {stream.map((event) => (
+                              <EventRow key={event.id} event={event} />
+                            ))}
+                          </ul>
+                        ) : null}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             ))}

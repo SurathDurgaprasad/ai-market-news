@@ -56,7 +56,7 @@ export const NewEventsNotifier: React.FC<{ latestEventTimestamp: string }> = ({
             const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             window.scrollTo({ top: 0, behavior: still ? 'auto' : 'smooth' });
           }}
-          className="inline-flex flex-col items-start rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-left transition-colors hover:border-accent hover:bg-accent/15"
+          className="mr-4 inline-flex flex-col items-start rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-left transition-colors hover:border-accent hover:bg-accent/15"
         >
           <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
             {newCount} new development{newCount > 1 ? 's' : ''}

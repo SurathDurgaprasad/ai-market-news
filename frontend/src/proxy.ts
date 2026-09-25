@@ -50,5 +50,15 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: '/events/:id',
+  matcher: [
+    {
+      source: '/events/:id',
+      // Prefetches of the many event links in view would each cost an API
+      // round trip; the navigation itself still gets the 404/308 decision.
+      missing: [
+        { type: 'header', key: 'next-router-prefetch' },
+        { type: 'header', key: 'purpose', value: 'prefetch' },
+      ],
+    },
+  ],
 };

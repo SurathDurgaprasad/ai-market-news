@@ -1,18 +1,39 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens. One neutral ramp, one accent, four semantic colors and a
+ * restrained category palette (seven desaturated hue families, not one color
+ * per category). Components use the Tailwind names in @theme below.
+ */
 :root {
-  --background: #101418;
-  --foreground: #e7edf3;
-  --surface: #171d24;
-  --surface-elevated: #1e2630;
-  --border: #313b48;
-  --text-secondary: #c5ced6;
-  --text-muted: #9aa6b4;
-  --accent: #9bb6c8;
+  --background: #0e1216;
+  --foreground: #e9eef3;
+  --surface: #151b21;
+  --surface-elevated: #1c242d;
+  --surface-hover: #19212a;
+  --border: #2a3440;
+  --border-strong: #3a4654;
+  --text-secondary: #c3ccd5;
+  --text-muted: #95a2b1;
+  --accent: #8fb4d6;
   --success: #8fbfa8;
   --warning: #d4b36a;
   --error: #e4b4b4;
+  --info: #8fb4d6;
   --danger-fill: #6a3333;
+
+  /* Category hue families. Low chroma so the headline stays dominant. */
+  --cat-models: #8fb4d6;
+  --cat-research: #b1a6d8;
+  --cat-agents: #7fc2b6;
+  --cat-hardware: #c9b27f;
+  --cat-security: #d99c9c;
+  --cat-open: #9dc39b;
+  --cat-neutral: #a7b1bd;
+
+  --radius-card: 6px;
+  --shadow-card: 0 1px 0 rgb(0 0 0 / 0.25);
+  --shadow-raised: 0 6px 18px -8px rgb(0 0 0 / 0.55);
   color-scheme: dark;
 }
 
@@ -21,13 +42,16 @@
   --color-ink: var(--foreground);
   --color-surface: var(--surface);
   --color-elevated: var(--surface-elevated);
+  --color-hover: var(--surface-hover);
   --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
   --color-secondary: var(--text-secondary);
   --color-muted: var(--text-muted);
   --color-accent: var(--accent);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--error);
+  --color-info: var(--info);
   --color-danger-fill: var(--danger-fill);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -37,37 +61,82 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-feature-settings: "cv11", "ss01";
 }
 
+/* One grid for every page: wide enough to use a 1920 screen, bounded for 2560+. */
 .intel-shell {
-  width: min(100%, 1680px);
+  width: min(100%, 1840px);
   margin-inline: auto;
-  padding-inline: 1.25rem;
+  padding-inline: 1rem;
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 768px) {
+  .intel-shell {
+    padding-inline: 1.5rem;
+  }
+}
+
+@media (min-width: 1280px) {
   .intel-shell {
     padding-inline: 2.5rem;
   }
 }
 
+/* Section kicker + title, shared by every section heading. */
+.intel-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
 a:focus-visible,
-button:focus-visible {
+button:focus-visible,
+summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.intel-card {
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.intel-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-raised);
+}
+
+.intel-card:focus-within {
+  border-color: var(--accent);
+}
+
+/* Compact feed row: the dense stream for lower-importance developments. */
+.intel-row {
+  transition: background-color 120ms ease;
+}
+
+.intel-row:hover,
+.intel-row:focus-within {
+  background: var(--surface-hover);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse {
     animation: none;
   }
-}
-
-.intel-card {
-  background: var(--surface);
-  border-color: var(--border);
-}
-
-.intel-card:focus-within {
-  border-color: var(--accent);
+  .intel-card,
+  .intel-row {
+    transition: none;
+  }
 }

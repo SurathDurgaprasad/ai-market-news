@@ -41,3 +41,23 @@ export function isOfficialTier(tier?: string | null): boolean {
   const value = (tier ?? "").toLowerCase();
   return value === "primary" || value === "research";
 }
+
+// "discovered=20 created=0 ..." from the scheduler, as a sentence an operator can scan.
+export function readableIngest(summary: string | null): string {
+  if (!summary) return '—';
+  const values: Record<string, number> = {};
+  for (const part of summary.trim().split(/\s+/)) {
+    const [key, raw] = part.split('=');
+    const value = Number(raw);
+    if (key && raw !== undefined && Number.isFinite(value)) values[key] = value;
+  }
+  if (!('discovered' in values)) return summary;
+  const parts = [`${values.discovered} in feed`];
+  const created = (values.created ?? 0) + (values.linked ?? 0);
+  parts.push(created > 0 ? `${values.created ?? 0} new · ${values.linked ?? 0} merged` : 'nothing new');
+  if (values.duplicates) parts.push(`${values.duplicates} already known`);
+  if (values.rejected) parts.push(`${values.rejected} out of scope`);
+  if (values.pending) parts.push(`${values.pending} awaiting enrichment`);
+  if (values.llm_errors) parts.push(`${values.llm_errors} LLM errors`);
+  return parts.join(' · ');
+}

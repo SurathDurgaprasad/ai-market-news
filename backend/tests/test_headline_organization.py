@@ -164,3 +164,20 @@ def test_repair_stored_headlines_is_reversible_and_idempotent(db_session):
     assert stored.importance_reasoning["original_headline"] == "Startup Raises $350 Million Series E Funding"
     assert stored.importance_reasoning["event_kind"] == "funding"
     assert repair_stored_headlines(db_session, apply=True) == []
+
+
+def test_a_biotech_placeholder_gets_its_name_back():
+    """Live: "AI Biotech Valued at $2 Billion" for TechCrunch's "Enveda secures $311M ..."."""
+    from app.core.headlines import restore_headline_organization
+
+    assert restore_headline_organization(
+        "AI Biotech Valued at $2 Billion in Funding Round",
+        source_title="Enveda secures $311M to bring more nature-derived AI drugs into clinical trials",
+        content="The funding round valued the AI biotech at $2 billion.",
+    ) == "Enveda Valued at $2 Billion in Funding Round"
+    # A biotech named as the object, not the subject, is left alone.
+    assert restore_headline_organization(
+        "Investors Back AI Biotech Wave",
+        source_title="Enveda secures $311M",
+        content="",
+    ) == "Investors Back AI Biotech Wave"
