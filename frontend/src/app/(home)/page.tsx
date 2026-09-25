@@ -5,12 +5,19 @@ import { EventRow } from '@/components/EventRow';
 import { SectionHeading } from '@/components/ui';
 import {
   MarketOverview,
+  MarketRail,
   type IngestionStatus,
   type MarketOverviewData,
 } from '@/components/MarketOverview';
 import { NewEventsNotifier } from '@/components/NewEventsNotifier';
 import { API_V1 } from '@/lib/api';
-import { ageHours, formatUtcInstrument, groupFeedByRecency, latestCreatedAt } from '@/lib/time';
+import {
+  ageHours,
+  formatUtcInstrument,
+  formatUtcWeekday,
+  groupFeedByRecency,
+  latestCreatedAt,
+} from '@/lib/time';
 
 // Ingestion runs every few minutes. Beyond this, "Live" would be a claim
 // the pipeline cannot back.
@@ -112,6 +119,7 @@ export default async function Home() {
   const sections = events && events.length > 0 ? groupFeedByRecency(events, nowIso) : [];
   const failing = overview?.ingestion?.sources_failing ?? 0;
   const enabled = overview?.ingestion?.sources_enabled ?? 0;
+  const today = formatUtcWeekday(nowIso).replace(' · ', ', ');
 
   return (
     <main className="flex-1 bg-canvas text-ink selection:bg-accent/30">
@@ -121,27 +129,27 @@ export default async function Home() {
       >
         Skip to latest developments
       </a>
-      <div className="intel-shell py-5 lg:py-6">
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-x-8 gap-y-4 border-b border-line pb-5">
+      <div className="intel-shell pb-6 pt-7 lg:pt-9">
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
           <div className="min-w-0">
-            <p className="intel-kicker">AI market intelligence</p>
-            <h1 className="mt-1 text-[1.6rem] font-semibold leading-tight tracking-[-0.015em] text-ink md:text-[1.9rem]">
-              What is changing in AI
+            {today ? <p className="intel-kicker">{today}</p> : null}
+            <h1 className="font-display mt-1.5 text-[2.2rem] font-semibold leading-[1.02] text-ink md:text-[2.9rem]">
+              What&apos;s happening in AI
             </h1>
-            <p className="tabular mt-1 text-[13px] text-muted">
-              {events ? `${events.length} canonical ${events.length === 1 ? 'development' : 'developments'} this week` : 'This week'}
+            <p className="tabular mt-2 text-[13.5px] text-muted">
+              {events ? `${events.length} ${events.length === 1 ? 'development' : 'developments'} this week` : 'This week'}
               {' · '}repeated coverage counts once · times in UTC
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-y-2">
+          <div className="flex flex-wrap items-center gap-3">
             {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
             {status ? (
-              <div className="min-w-0 rounded-[var(--radius-card)] border border-line bg-surface px-3.5 py-2" role="status">
-                <p className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] ${STATE_CLASS[status.state].text}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${STATE_CLASS[status.state].dot}`} aria-hidden="true" />
+              <div className="min-w-0 max-w-[46ch] md:text-right" role="status">
+                <p className={`inline-flex items-center gap-2 text-[12px] font-semibold ${STATE_CLASS[status.state].text}`}>
+                  <span className={`h-2 w-2 rounded-full ${STATE_CLASS[status.state].dot}`} aria-hidden="true" />
                   {status.label}
                 </p>
-                {status.detail ? <p className="mt-0.5 text-[12px] text-muted">{status.detail}</p> : null}
+                {status.detail ? <p className="mt-0.5 text-[12px] leading-snug text-muted">{status.detail}</p> : null}
                 {failing > 0 ? (
                   <p className="mt-0.5 text-[12px] text-muted">
                     <Link href="/admin/sources" className="underline decoration-line underline-offset-2 hover:text-ink">
@@ -156,74 +164,81 @@ export default async function Home() {
 
         {overview ? <MarketOverview data={overview} stale={status?.state !== 'live'} /> : null}
 
-        <div id="latest-developments" className="scroll-mt-16">
-          <SectionHeading
-            id="latest-heading"
-            kicker="This week"
-            title="Latest developments"
-            note="Newest first. Significant developments as cards, the rest as a compact stream. Open one for evidence and coverage; the source link opens the original."
-          />
-        </div>
+        <div className="mt-14 grid grid-cols-1 gap-x-12 gap-y-12 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
+          <div id="latest-developments" className="min-w-0 scroll-mt-20">
+            <SectionHeading
+              id="latest-heading"
+              kicker="This week"
+              title="Latest developments"
+              note="Newest first. Significant developments as cards, the rest as a compact list. The source link opens the original."
+            />
 
-        {!events ? (
-          <div className="rounded-md border border-danger/40 bg-danger/10 p-6 text-center text-danger" role="alert">
-            <p className="font-semibold">Intelligence API unavailable</p>
-            <p className="mt-1 text-sm">The feed could not be loaded. Try again shortly.</p>
-          </div>
-        ) : events.length === 0 ? (
-          <div className="rounded-md border border-line bg-surface p-10 text-center text-muted">
-            <p className="text-base font-medium text-secondary">No developments this week yet</p>
-            <p className="mt-1 text-sm">New canonical events appear here as sources are ingested.</p>
-          </div>
-        ) : (
-          <div className="space-y-10">
-            {sections.map((section) => (
-              <section key={section.id} aria-labelledby={`section-${section.id}`}>
-                <div className="mb-4 flex flex-wrap items-baseline gap-x-3">
-                  <h3
-                    id={`section-${section.id}`}
-                    className="text-[12px] font-semibold uppercase tracking-[0.18em] text-secondary"
-                  >
-                    {section.title}
-                  </h3>
-                  {section.subtitle ? (
-                    <p className="text-[12px] tracking-wide text-muted">{section.subtitle}</p>
-                  ) : null}
-                </div>
-                <div className="space-y-7">
-                  {section.days.map((day) => {
-                    const prominent = day.events.filter((event) => event.importance_score >= CARD_MIN_IMPORTANCE);
-                    const stream = day.events.filter((event) => event.importance_score < CARD_MIN_IMPORTANCE);
-                    return (
-                      <div key={day.key} className="space-y-3">
-                        {day.label ? (
-                          <p className="intel-kicker">{day.label}</p>
-                        ) : null}
-                        {prominent.length > 0 ? (
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                            {prominent.map((event) => (
-                              <EventCard key={event.id} event={event} headingLevel="h4" />
-                            ))}
+            {!events ? (
+              <div className="rounded-md border border-danger/40 bg-danger/10 p-6 text-center text-danger" role="alert">
+                <p className="font-semibold">Intelligence API unavailable</p>
+                <p className="mt-1 text-sm">The feed could not be loaded. Try again shortly.</p>
+              </div>
+            ) : events.length === 0 ? (
+              <div className="rounded-md border border-line bg-surface p-10 text-center text-muted">
+                <p className="text-base font-medium text-secondary">No developments this week yet</p>
+                <p className="mt-1 text-sm">New developments appear here as sources are read.</p>
+              </div>
+            ) : (
+              <div className="space-y-10">
+                {sections.map((section) => (
+                  <section key={section.id} aria-labelledby={`section-${section.id}`}>
+                    <div className="mb-3 flex flex-wrap items-baseline gap-x-3">
+                      <h3
+                        id={`section-${section.id}`}
+                        className="text-[13px] font-semibold uppercase tracking-[0.14em] text-ink"
+                      >
+                        {section.title}
+                      </h3>
+                      {section.subtitle ? (
+                        <p className="text-[12.5px] text-muted">{section.subtitle}</p>
+                      ) : null}
+                    </div>
+                    <div className="space-y-6">
+                      {section.days.map((day) => {
+                        const prominent = day.events.filter((event) => event.importance_score >= CARD_MIN_IMPORTANCE);
+                        const stream = day.events.filter((event) => event.importance_score < CARD_MIN_IMPORTANCE);
+                        return (
+                          <div key={day.key} className="space-y-3">
+                            {day.label ? <p className="intel-kicker">{day.label}</p> : null}
+                            {prominent.length > 0 ? (
+                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                                {prominent.map((event) => (
+                                  <EventCard key={event.id} event={event} headingLevel="h4" />
+                                ))}
+                              </div>
+                            ) : null}
+                            {stream.length > 0 ? (
+                              <ul
+                                className="divide-y divide-line border-y border-line"
+                                aria-label={`${stream.length} more ${stream.length === 1 ? 'development' : 'developments'}`}
+                              >
+                                {stream.map((event) => (
+                                  <EventRow key={event.id} event={event} />
+                                ))}
+                              </ul>
+                            ) : null}
                           </div>
-                        ) : null}
-                        {stream.length > 0 ? (
-                          <ul
-                            className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface"
-                            aria-label={`${stream.length} more ${stream.length === 1 ? 'development' : 'developments'}`}
-                          >
-                            {stream.map((event) => (
-                              <EventRow key={event.id} event={event} />
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
           </div>
-        )}
+
+          {/* On narrow screens the rail comes before the long feed, keeping the page's reading order. */}
+          {overview ? (
+            <aside className="order-first min-w-0 xl:order-none" aria-label="Activity by area and organization">
+              <MarketRail data={overview} />
+            </aside>
+          ) : null}
+        </div>
       </div>
     </main>
   );

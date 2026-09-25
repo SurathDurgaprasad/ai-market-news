@@ -1,5 +1,5 @@
 /**
- * Centralized API configuration for the AI World Intelligence Platform.
+ * Centralized API configuration for AI Market News.
  *
  * The backend API is served at /api/v1 — all frontend fetch calls must use
  * this base URL to avoid the mismatch with the plain /events/ path.

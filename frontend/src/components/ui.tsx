@@ -22,21 +22,28 @@ export function SectionHeading({
   title,
   note,
   aside,
+  ruled = true,
 }: {
   id: string;
   kicker: string;
   title: string;
   note?: ReactNode;
   aside?: ReactNode;
+  // Off where a rule already sits directly above (the hero under the Trending strip).
+  ruled?: boolean;
 }) {
   return (
-    <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-1 border-b border-line pb-2.5">
+    <div
+      className={`mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-1 ${
+        ruled ? "border-t-2 border-ink/80 pt-2.5" : ""
+      }`}
+    >
       <div className="min-w-0">
         <p className="intel-kicker">{kicker}</p>
-        <h2 id={id} className="mt-0.5 scroll-mt-20 text-[18px] font-semibold tracking-tight text-ink">
+        <h2 id={id} className="font-display mt-1 scroll-mt-20 text-[1.6rem] font-semibold leading-tight text-ink">
           {title}
         </h2>
-        {note ? <p className="mt-0.5 max-w-[72ch] text-[12.5px] leading-relaxed text-muted">{note}</p> : null}
+        {note ? <p className="mt-1 max-w-[72ch] text-[12.5px] leading-relaxed text-muted">{note}</p> : null}
       </div>
       {aside ? <div className="shrink-0">{aside}</div> : null}
     </div>

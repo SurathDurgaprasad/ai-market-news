@@ -433,3 +433,380 @@ def restore_version_evidence(db: Session, *, apply: bool = False, llm=None) -> l
     if apply and restored:
         db.commit()
     return restored
+
+
+def _category_event(event: Event):
+    """The fields market_category reads, from a stored event."""
+    from app.core.market import MarketEvent
+
+    reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+    return MarketEvent(
+        id=str(event.id),
+        headline=event.headline or "",
+        summary=event.short_summary or "",
+        importance=event.importance_score or 0,
+        occurred_at=event.event_time or event.created_at or datetime.now(timezone.utc),
+        event_kind=str(reasoning.get("event_kind") or "other"),
+        classified_category=str(reasoning.get("market_category") or ""),
+    )
+
+
+# Historical category backfill: card text only, batched, two passes.
+CATEGORY_BATCH_SIZE = 20
+CATEGORY_CARD_CHARS = 320
+# System prompt plus JSON schema, per request (measured ~420 tokens for gpt-4.1).
+_CATEGORY_REQUEST_OVERHEAD_TOKENS = 450
+_CATEGORY_OUTPUT_TOKENS_PER_CARD = 14
+_CATEGORY_SECONDS_PER_REQUEST = 6
+
+
+def category_backfill_candidates(db: Session, limit: int = 1000) -> list[Event]:
+    """Live events with no category from any rule and no stored market_category answer."""
+    from app.core.market import market_category
+
+    live = (
+        db.query(Event)
+        .filter(Event.superseded_by_id.is_(None))
+        .order_by(func.coalesce(Event.event_time, Event.created_at).desc())
+        .all()
+    )
+    found: list[Event] = []
+    for event in live:
+        reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+        if "market_category" in reasoning or not (event.headline or "").strip():
+            continue
+        if market_category(_category_event(event)):
+            continue
+        found.append(event)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _category_card(event: Event) -> str:
+    summary = " ".join((event.short_summary or "").split())[:CATEGORY_CARD_CHARS]
+    return f"{event.headline}. {summary}".strip()
+
+
+def estimate_category_backfill(events: list[Event], batch_size: int = CATEGORY_BATCH_SIZE) -> dict:
+    """Requests, tokens and runtime for two batched passes, before any call is made."""
+    batches = -(-len(events) // batch_size) if events else 0
+    card_tokens = sum(len(_category_card(event)) // 4 + 12 for event in events)
+    requests = 2 * batches
+    return {
+        "events": len(events),
+        "batch_size": batch_size,
+        "requests": requests,
+        "input_tokens": 2 * card_tokens + requests * _CATEGORY_REQUEST_OVERHEAD_TOKENS,
+        "output_tokens": 2 * len(events) * _CATEGORY_OUTPUT_TOKENS_PER_CARD,
+        "runtime_seconds": requests * _CATEGORY_SECONDS_PER_REQUEST,
+    }
+
+
+def _classify_batch(llm, cards: list[tuple[str, str]], pause_seconds: float) -> dict:
+    """One batch, retried once after a pause (rate limits). Raises LlmUnavailableError after that."""
+    import time
+
+    from app.core.llm_usage import llm_subject
+    from app.core.providers.llm import LlmUnavailableError
+
+    with llm_subject(f"category_backfill:{cards[0][0]}..{cards[-1][0]}"):
+        for attempt in range(2):
+            try:
+                answers = llm.classify_categories(cards)
+                if pause_seconds:
+                    time.sleep(pause_seconds)
+                return answers
+            except LlmUnavailableError:
+                if attempt == 1:
+                    raise
+                time.sleep(max(pause_seconds, 20.0))
+    return {}
+
+
+def classify_categories_batched(
+    llm,
+    events: list[Event],
+    *,
+    batch_size: int = CATEGORY_BATCH_SIZE,
+    pause_seconds: float = 0.0,
+) -> list[dict]:
+    """
+    Two independent batched passes over card text. Pass B sees the cards in
+    reverse order, so each card is judged next to different neighbours. A
+    label is proposed only when both passes return the same taxonomy label,
+    and never Security (that still needs security language). No database
+    writes; the result is applied separately.
+    """
+    from app.core.market import normalize_market_category
+
+    ids = {f"c{index + 1}": event for index, event in enumerate(events)}
+    order = list(ids.items())
+
+    def run(pass_order):
+        answers: dict[str, Optional[str]] = {}
+        for start in range(0, len(pass_order), batch_size):
+            chunk = pass_order[start:start + batch_size]
+            cards = [(card_id, _category_card(event)) for card_id, event in chunk]
+            answers.update(_classify_batch(llm, cards, pause_seconds))
+        return answers
+
+    first = run(order)
+    second = run(list(reversed(order)))
+    rows = []
+    for card_id, event in order:
+        a = normalize_market_category(first.get(card_id))
+        b = normalize_market_category(second.get(card_id))
+        label = a if a and a == b and a != "Security" else None
+        rows.append({"event_id": str(event.id), "headline": event.headline, "pass_a": a, "pass_b": b, "label": label})
+    return rows
+
+
+def apply_category_backfill(db: Session, rows: list[dict]) -> int:
+    """
+    Store agreed labels from a saved dry run. No LLM call. Each event is
+    re-checked: still live, still uncategorized, no stored answer. Reverted
+    by removing market_category and category_backfill from importance_reasoning.
+    """
+    import uuid
+
+    from app.core.market import MARKET_CATEGORIES, market_category
+
+    applied = 0
+    for row in rows:
+        label = row.get("label")
+        if label not in MARKET_CATEGORIES or label == "Security":
+            continue
+        try:
+            event = db.get(Event, uuid.UUID(str(row.get("event_id"))))
+        except ValueError:
+            continue
+        if event is None or event.superseded_by_id is not None:
+            continue
+        reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+        if "market_category" in reasoning or market_category(_category_event(event)):
+            continue
+        updated = dict(reasoning)
+        updated["market_category"] = label
+        updated["category_backfill"] = {
+            "method": "batched_card_two_pass",
+            "pass_a": row.get("pass_a"),
+            "pass_b": row.get("pass_b"),
+        }
+        event.importance_reasoning = updated
+        applied += 1
+    db.commit()
+    return applied
+
+
+def revert_category_backfill(db: Session) -> int:
+    reverted = 0
+    for event in db.query(Event).all():
+        reasoning = event.importance_reasoning if isinstance(event.importance_reasoning, dict) else {}
+        if "category_backfill" not in reasoning:
+            continue
+        updated = {k: v for k, v in reasoning.items() if k not in ("market_category", "category_backfill")}
+        event.importance_reasoning = updated
+        reverted += 1
+    db.commit()
+    return reverted
+
+
+def repair_digest_events(db: Session, llm, *, apply: bool = False) -> list[tuple[str, list, list, str]]:
+    """
+    Newsletter-digest cards classified from the whole digest before the
+    lead-segment boundary existed. A card is repaired only when its stored
+    entities include a name the digest's roundup section contains and its
+    lead story does not (the must-reads' names), and only when the headline
+    itself is about the lead story. Such a card is classified again from the
+    lead segment, as ingestion now does; the old entities, kind and
+    importance are kept in importance_reasoning["digest_repair"]. A card
+    whose headline came from the roundup is reported, not changed: fixing it
+    means a new summary, not new entities.
+    Returns (headline, old, new, status) with status "repaired" or
+    "headline from roundup".
+    """
+    from app.core.digest import entities_named_in, is_digest, lead_segment
+    from app.core.importance import calibrate_importance_score, normalize_importance_score
+    from app.core.market import normalize_market_category
+
+    from app.core.deduplication import claim_stems
+
+    repaired: list[tuple[str, list, list, str]] = []
+    for event in db.query(Event).filter(Event.superseded_by_id.is_(None)).all():
+        article = _primary_article(db, event)
+        if article is None or not is_digest(article.title, article.raw_content):
+            continue
+        lead = lead_segment(article.title, article.raw_content)
+        roundup = (article.raw_content or "")[len(lead):]
+        old = [e for e in (event.entities or []) if isinstance(e, str)]
+        in_lead = set(entities_named_in(old, lead))
+        leaked = [e for e in entities_named_in(old, roundup) if e not in in_lead]
+        if not leaked:
+            continue  # nothing came in from another story
+        headline_stems = claim_stems(event.headline)
+        if len(headline_stems & claim_stems(lead)) <= len(headline_stems & claim_stems(roundup)):
+            repaired.append((event.headline, old, old, "headline from roundup"))
+            continue
+        result = llm.classify_event(lead)
+        if result is None:
+            continue
+        new = entities_named_in(list(result.primary_entities or result.entities or []), lead)
+        repaired.append((event.headline, old, new, "repaired"))
+        if not apply:
+            continue
+        reasoning = dict(event.importance_reasoning) if isinstance(event.importance_reasoning, dict) else {}
+        score = normalize_importance_score(result.importance_score)
+        kind = result.event_kind or "other"
+        reasoning["digest_repair"] = {
+            "entities": old,
+            "mentioned_entities": list(event.mentioned_entities or []),
+            "event_kind": reasoning.get("event_kind"),
+            "importance_score": event.importance_score,
+        }
+        reasoning.update(
+            event_kind=kind,
+            scope=result.technical_change_scope,
+            security_impact=result.security_impact,
+            market_category=normalize_market_category(result.market_category),
+        )
+        event.entities = new
+        event.mentioned_entities = entities_named_in(list(result.mentioned_entities or []), lead)
+        if score is not None:
+            event.importance_score = calibrate_importance_score(
+                score, kind, result.technical_change_scope, result.security_impact
+            ) or event.importance_score
+        event.importance_reasoning = reasoning
+    if apply and any(status == "repaired" for *_rest, status in repaired):
+        db.commit()
+    return repaired
+
+
+def propose_digest_rebuild(db: Session, llm, event_id: str) -> dict:
+    """
+    A digest card whose headline, summary and citations all came from a
+    roundup item (repair-digests reports it as "headline from roundup").
+    The card is rebuilt from the digest's lead story, the same way ingestion
+    now builds one: summary and classification from the lead segment,
+    citations kept only when the evidence validator finds them in it. Two
+    LLM requests. Nothing is written; apply_digest_rebuild stores it.
+    Returns {"status": ..., "event_id", "old", "new"}.
+    """
+    import uuid
+
+    from app.core.deduplication import fallback_source_citations, validate_evidence
+    from app.core.digest import entities_named_in, is_digest, lead_segment
+    from app.core.entities import select_primary_entities
+    from app.core.importance import calibrate_importance_score, normalize_importance_score
+    from app.core.llm_usage import llm_subject
+    from app.core.market import normalize_market_category
+
+    event = db.get(Event, uuid.UUID(str(event_id)))
+    if event is None or event.superseded_by_id is not None:
+        return {"status": "not a live event", "event_id": str(event_id)}
+    article = _primary_article(db, event)
+    if article is None or not is_digest(article.title, article.raw_content):
+        return {"status": "not a newsletter digest", "event_id": str(event_id)}
+    lead = lead_segment(article.title, article.raw_content)
+    if lead == (article.raw_content or ""):
+        return {"status": "no lead-story boundary", "event_id": str(event_id)}
+    with llm_subject(f"event:{event.id}"):
+        classification = llm.classify_event(lead)
+        summary = llm.summarize_event(lead)
+    if summary is None or not (summary.headline or "").strip() or classification is None:
+        return {"status": "model returned no usable summary", "event_id": str(event_id)}
+    claim = " ".join(part for part in (summary.headline, summary.short_summary, summary.what_changed) if part)
+    citations = validate_evidence(lead, summary.citations or [], claim=claim) or fallback_source_citations(
+        lead, short_summary=summary.short_summary, what_changed=summary.what_changed
+    )
+    if not citations:
+        return {"status": "no evidence found in the lead story", "event_id": str(event_id)}
+    primary, mentioned = select_primary_entities(
+        primary=classification.primary_entities,
+        mentioned=classification.mentioned_entities,
+        all_entities=classification.entities,
+        headline=summary.headline,
+        summary=summary.short_summary,
+    )
+    kind = classification.event_kind or "other"
+    score = normalize_importance_score(classification.importance_score)
+    if score is not None:
+        score = calibrate_importance_score(score, kind, classification.technical_change_scope, classification.security_impact)
+    duplicate = (
+        db.query(Event)
+        .filter(Event.superseded_by_id.is_(None), Event.id != event.id, Event.headline == summary.headline.strip())
+        .first()
+    )
+    if duplicate is not None:
+        return {"status": "headline already used by another live card", "event_id": str(event_id)}
+    return {
+        "status": "proposed",
+        "event_id": str(event.id),
+        "old": {
+            "headline": event.headline,
+            "short_summary": event.short_summary,
+            "what_changed": event.what_changed,
+            "citations": list(event.citations or []),
+            "entities": list(event.entities or []),
+            "mentioned_entities": list(event.mentioned_entities or []),
+            "importance_score": event.importance_score,
+            "importance_reasoning": event.importance_reasoning,
+        },
+        "new": {
+            "headline": summary.headline.strip(),
+            "short_summary": (summary.short_summary or "").strip(),
+            "what_changed": summary.what_changed,
+            "citations": citations,
+            "entities": entities_named_in(primary, lead),
+            "mentioned_entities": entities_named_in(mentioned, lead),
+            "importance_score": score or event.importance_score,
+            "event_kind": kind,
+            "scope": classification.technical_change_scope,
+            "security_impact": classification.security_impact,
+            "market_category": normalize_market_category(classification.market_category),
+            "importance_text": classification.importance_reasoning,
+        },
+    }
+
+
+def apply_digest_rebuild(db: Session, proposal: dict) -> str:
+    """
+    Store a saved proposal. No LLM call. Evidence is checked again against
+    the stored lead story, and the old card is kept in
+    importance_reasoning["digest_rebuild"] so the change can be reverted.
+    """
+    import uuid
+
+    from app.core.deduplication import _normalize_citation_text
+    from app.core.digest import lead_segment
+
+    if proposal.get("status") != "proposed":
+        return "nothing to apply"
+    event = db.get(Event, uuid.UUID(str(proposal["event_id"])))
+    if event is None or event.superseded_by_id is not None:
+        return "not a live event"
+    if event.headline != proposal["old"]["headline"]:
+        return "card changed since the proposal"
+    article = _primary_article(db, event)
+    lead = lead_segment(article.title, article.raw_content) if article is not None else ""
+    new = proposal["new"]
+    source = _normalize_citation_text(lead)
+    if not new["citations"] or any(_normalize_citation_text(c) not in source for c in new["citations"]):
+        return "evidence is not in the lead story"
+    event.headline = new["headline"]
+    event.short_summary = new["short_summary"]
+    event.what_changed = new["what_changed"]
+    event.citations = new["citations"]
+    event.entities = new["entities"]
+    event.mentioned_entities = new["mentioned_entities"]
+    event.importance_score = new["importance_score"]
+    event.importance_reasoning = {
+        "text": new["importance_text"],
+        "event_kind": new["event_kind"],
+        "scope": new["scope"],
+        "security_impact": new["security_impact"],
+        "market_category": new["market_category"],
+        "digest_rebuild": proposal["old"],
+    }
+    db.commit()
+    return "applied"

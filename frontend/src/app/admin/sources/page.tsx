@@ -3,7 +3,12 @@ import type { Metadata } from 'next';
 import { unstable_rethrow } from 'next/navigation';
 import { API_V1 } from '@/lib/api';
 import { formatUtcMeta } from '@/lib/time';
-import { readableIngest } from '@/lib/sources';
+import { evidenceLabel, readableIngest } from '@/lib/sources';
+
+// The same words readers see on cards: Official source, Research paper, News coverage, Discussion.
+function tierLabel(tier: string): string {
+  return evidenceLabel({ tier });
+}
 
 interface AdminSource {
   id: string;
@@ -70,7 +75,7 @@ export default async function AdminSourcesPage() {
     <main className="flex-1 bg-canvas text-ink">
       <div className="intel-shell py-6 lg:py-8">
         <header className="mb-6 border-b border-line pb-5">
-          <h1 className="text-[1.6rem] font-semibold tracking-tight">Sources</h1>
+          <h1 className="font-display text-[2.2rem] font-semibold leading-none">Sources</h1>
           <p className="mt-1 text-[13px] text-muted">
             Ingestion health for the registry. Add or disable a source with manage_sources.py; the scheduler
             picks it up on the next tick. Times in UTC.
@@ -111,7 +116,7 @@ export default async function AdminSourcesPage() {
                     <span className="shrink-0"><HealthPill source={source} /></span>
                   </div>
                   <p className="mt-0.5 text-[12px] text-muted">
-                    {source.tier} · {source.last_fetch_at ? `last fetch ${formatUtcMeta(source.last_fetch_at)}` : 'never fetched'}
+                    {tierLabel(source.tier)} · {source.last_fetch_at ? `last fetch ${formatUtcMeta(source.last_fetch_at)}` : 'never fetched'}
                     {source.consecutive_failures > 0 ? ` · ${source.consecutive_failures} consecutive failures` : ''}
                   </p>
                   {source.last_error_info ? (
@@ -149,7 +154,7 @@ export default async function AdminSourcesPage() {
                         {source.name}
                         <p className="mt-0.5 max-w-[28ch] truncate text-[12px] font-normal text-muted">{source.url}</p>
                       </td>
-                      <td className={`${td} text-secondary`}>{source.tier}</td>
+                      <td className={`${td} text-secondary`}>{tierLabel(source.tier)}</td>
                       <td className={`${td} whitespace-nowrap`}>
                         <HealthPill source={source} />
                         {source.consecutive_failures > 0 ? (

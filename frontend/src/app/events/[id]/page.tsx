@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { notFound, redirect, unstable_rethrow } from 'next/navigation';
 import { API_V1 } from '@/lib/api';
 import { formatCitation } from '@/lib/citations';
-import { detailImageClass, importanceMeta, type ImageRole } from '@/lib/importance';
+import { importanceMeta, type ImageRole } from '@/lib/importance';
 import { displaySource, evidenceLabel, isOfficialTier, type SourceRef } from '@/lib/sources';
 import { factualSummary, formatUtcMeta, formatUtcWhen, hasClockTime, formatUtcDay } from '@/lib/time';
 import { safeHttpUrl } from '@/lib/urls';
 import { CategoryTag } from '@/components/ui';
+import { EventImage } from '@/components/EventImage';
 
 type LinkedArticle = {
   title: string;
@@ -197,6 +198,10 @@ export default async function EventDetailPage({
     linked.some((article) => isOfficialTier(article.source_tier)) ||
     sourceLabel === 'Research paper';
 
+  const showImage = Boolean(safeImageUrl);
+  const publisherCount = Math.max(publishers.size, 1);
+  const openLabel = OPEN_LABEL[sourceLabel] ?? 'Open source';
+
   return (
     <main className="flex-1 bg-canvas text-ink selection:bg-accent/30">
       <a
@@ -205,21 +210,22 @@ export default async function EventDetailPage({
       >
         Skip to event
       </a>
-      <div className="intel-shell py-6 lg:py-8">
-        <nav className="mb-6" aria-label="Breadcrumb">
+      <div className="intel-shell py-7 lg:py-9">
+        <div className="mx-auto max-w-[1360px]">
+        <nav className="mb-7" aria-label="Breadcrumb">
           <Link
             href="/"
             className="inline-flex items-center text-[13px] font-medium text-secondary transition-colors hover:text-ink"
           >
-            ← Overview
+            ← All developments
           </Link>
         </nav>
 
         <div
           id="event-body"
-          className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px] xl:gap-14"
+          className="grid grid-cols-1 gap-12 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-16"
         >
-          <div className="min-w-0 space-y-10">
+          <article className="min-w-0 space-y-10">
             <header>
               <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold uppercase tracking-[0.14em]">
                 <CategoryTag category={event.category} />
@@ -228,93 +234,112 @@ export default async function EventDetailPage({
                   <span className="rounded-[3px] border border-accent/40 px-1 py-px text-[10px] text-accent">Updated</span>
                 ) : null}
               </p>
-              <h1 className="mt-3 max-w-[40ch] text-[1.75rem] font-semibold leading-[1.18] tracking-[-0.015em] text-ink md:text-[2.2rem]">
+              <h1 className="font-display mt-3 text-[2.1rem] font-semibold leading-[1.08] text-ink md:text-[2.9rem]">
                 {event.headline}
               </h1>
-              <p className="mt-3 text-[13px] text-muted">
-                {source?.name ? <span className="font-medium text-secondary">{source.name}</span> : null}
-                {source?.name && displayTime ? ' · ' : null}
-                {displayTime ? <time dateTime={occurred}>{displayTime}</time> : null}
-                {updatedAt ? (
-                  <span>
-                    {' · '}
-                    <span className="text-accent">Updated</span>{' '}
-                    <time dateTime={event.created_at}>{updatedAt}</time>
-                  </span>
-                ) : null}
-              </p>
-              {/* The record's key facts, scannable in one line. */}
-              <dl className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-card)] border border-line bg-line sm:grid-cols-4">
-                {[
-                  ['Occurred', displayTime || '—'],
-                  ['First recorded', firstSeen],
-                  ['Importance', `${tier.label} · ${event.importance_score ?? 0}`],
-                  ['Publishers', String(Math.max(publishers.size, 1))],
-                ].map(([label, value]) => (
-                  <div key={label} className="bg-surface px-3.5 py-2.5">
-                    <dt className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">{label}</dt>
-                    <dd className="tabular mt-0.5 text-[13.5px] text-ink">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-              {safeImageUrl ? (
-                <div
-                  className={`relative mt-5 w-full overflow-hidden rounded-[var(--radius-card)] border border-line bg-elevated ${detailImageClass(imageRole)}`}
-                >
-                  <img
-                    src={safeImageUrl}
-                    alt=""
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    className="absolute inset-0 h-full w-full object-cover object-center"
-                  />
-                </div>
-              ) : null}
-            </header>
-
-            <section aria-labelledby="what-happened">
-              <h2 id="what-happened" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                What happened
-              </h2>
               {summary ? (
-                <p className="max-w-[64ch] text-[17px] leading-[1.7] text-secondary">{summary}</p>
+                <p className="mt-4 text-[18.5px] leading-[1.6] text-secondary">{summary}</p>
               ) : (
-                <p className="max-w-[64ch] text-sm leading-relaxed text-muted">
+                <p className="mt-4 text-sm leading-relaxed text-muted">
                   No source-grounded summary was extracted. The source link remains available.
                 </p>
               )}
-            </section>
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-y border-line py-3">
+                <p className="text-[13px] text-muted">
+                  {source?.name ? <span className="font-medium text-ink">{source.name}</span> : null}
+                  {source?.name && displayTime ? ' · ' : null}
+                  {displayTime ? <time dateTime={occurred}>{displayTime}</time> : null}
+                  {publisherCount > 1 ? ` · ${publisherCount} publishers` : ''}
+                  {updatedAt ? (
+                    <span>
+                      {' · '}
+                      <span className="text-accent">Updated</span>{' '}
+                      <time dateTime={event.created_at}>{updatedAt}</time>
+                    </span>
+                  ) : null}
+                </p>
+                {sourceHref ? (
+                  <a
+                    href={sourceHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`${openLabel}: ${source?.name ?? 'source'} (opens in a new tab)`}
+                    className="inline-flex items-center gap-1.5 rounded-[4px] border border-accent/50 px-3 py-1.5 text-[13px] font-medium text-accent transition-colors hover:bg-accent/10"
+                  >
+                    {openLabel}
+                    <span aria-hidden="true">↗</span>
+                  </a>
+                ) : null}
+              </div>
+              {showImage ? (
+                <figure className="mt-6">
+                  <EventImage
+                    id={event.id}
+                    size="lead"
+                    category={event.category}
+                    priority
+                    sizes="(min-width: 1024px) 880px, 100vw"
+                    className={`w-full rounded-[var(--radius-card)] border border-line ${
+                      imageRole === 'hero' ? 'aspect-[16/9]' : 'aspect-[2/1]'
+                    }`}
+                  />
+                  {source?.name ? (
+                    <figcaption className="mt-2 text-[12px] text-muted">Image: {source.name}</figcaption>
+                  ) : null}
+                </figure>
+              ) : null}
+            </header>
 
             {keyChanges.length > 0 ? (
               <section aria-labelledby="key-changes">
-                <h2 id="key-changes" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                  Key changes
+                <h2 id="key-changes" className="font-display mb-3 text-[1.35rem] font-semibold text-ink">
+                  What changed
                 </h2>
-                <ol className="max-w-[64ch] space-y-3">
+                <ol className="space-y-3">
                   {keyChanges.map((item, idx) => (
                     <li key={idx} className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3">
-                      <span className="pt-0.5 font-mono text-[11px] tracking-wider text-muted">
+                      <span className="tabular pt-0.5 font-mono text-[12px] text-muted">
                         {String(idx + 1).padStart(2, '0')}
                       </span>
-                      <span className="text-[15px] leading-relaxed text-secondary">{item}</span>
+                      <span className="text-[16px] leading-relaxed text-secondary">{item}</span>
                     </li>
                   ))}
                 </ol>
               </section>
             ) : null}
 
+            {citations.length > 0 ? (
+              <section aria-labelledby="evidence">
+                <h2 id="evidence" className="font-display mb-1 text-[1.35rem] font-semibold text-ink">
+                  In the source&apos;s words
+                </h2>
+                <p className="mb-4 text-[12.5px] text-muted">
+                  Quoted verbatim from {source?.name ?? 'the source'}; each quote was checked against the article text.
+                </p>
+                <ul className="space-y-4">
+                  {citations.map((citation, idx) => (
+                    <li key={idx}>
+                      <blockquote className="font-display border-l-2 border-accent/60 pl-4 text-[1.15rem] italic leading-relaxed text-secondary">
+                        {citation}
+                      </blockquote>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
             {entities.length > 0 ? (
               <section aria-labelledby="entities">
-                <h2 id="entities" className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
-                  Named in the source
+                <h2 id="entities" className="font-display mb-3 text-[1.35rem] font-semibold text-ink">
+                  Who is involved
                 </h2>
-                <ul className="flex max-w-[64ch] flex-wrap gap-2">
+                <ul className="flex flex-wrap gap-2">
                   {entities.slice(0, ENTITY_PREVIEW).map((entity) => (
                     <EntityChip key={entity} name={entity} />
                   ))}
                 </ul>
                 {entities.length > ENTITY_PREVIEW ? (
-                  <details className="mt-2 max-w-[64ch]">
+                  <details className="mt-2">
                     <summary className="w-fit cursor-pointer text-[13px] text-muted hover:text-ink">
                       {entities.length - ENTITY_PREVIEW} more mentioned
                     </summary>
@@ -330,16 +355,20 @@ export default async function EventDetailPage({
 
             {related.length > 0 ? (
               <section aria-labelledby="related">
-                <h2 id="related" className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+                <h2 id="related" className="font-display mb-1 text-[1.35rem] font-semibold text-ink">
                   Related developments
                 </h2>
                 <ul>
                   {related.map((item) => (
-                    <li key={item.id} className="border-b border-line py-3 last:border-b-0">
-                      <p className="text-[12px] text-muted">
-                        {[item.reason, item.category, formatUtcWhen(item.event_time)].filter(Boolean).join(' · ')}
+                    <li key={item.id} className="group relative border-b border-line py-3.5 last:border-b-0">
+                      <p className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted">
+                        <CategoryTag category={item.category} />
+                        <span>{[item.reason, formatUtcWhen(item.event_time)].filter(Boolean).join(' · ')}</span>
                       </p>
-                      <Link href={`/events/${item.id}`} className="mt-0.5 block text-[15px] leading-snug text-ink hover:text-accent">
+                      <Link
+                        href={`/events/${item.id}`}
+                        className="card-link headline-hover font-display mt-1 block text-[1.15rem] leading-snug text-ink"
+                      >
                         {item.headline}
                       </Link>
                     </li>
@@ -347,9 +376,36 @@ export default async function EventDetailPage({
                 </ul>
               </section>
             ) : null}
-          </div>
+          </article>
 
-          <aside className="min-w-0 space-y-4 lg:sticky lg:top-16 lg:self-start" aria-label="Evidence">
+          <aside className="min-w-0 space-y-4 lg:sticky lg:top-20 lg:self-start" aria-label="Facts and sources">
+            <section className="rounded-md border border-line bg-surface p-5">
+              <SideHeading>At a glance</SideHeading>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 text-[13px]">
+                <dt className="text-muted">Occurred</dt>
+                <dd className="tabular text-ink">{displayTime || '—'}</dd>
+                <dt className="text-muted">First recorded</dt>
+                <dd className="tabular text-ink">{firstSeen}</dd>
+                <dt className="text-muted">Importance</dt>
+                <dd className="text-ink">
+                  <span className={tier.badge}>{tier.label}</span>
+                  <span className="tabular text-muted"> · {event.importance_score ?? 0}/100</span>
+                </dd>
+                <dt className="text-muted">Publishers</dt>
+                <dd className="tabular text-ink">{publisherCount}</dd>
+                <dt className="text-muted">Reports</dt>
+                <dd className="tabular text-ink">
+                  {Math.max(linked.length, 1)}
+                  {isUpdate ? <span className="text-muted"> · version {version}</span> : null}
+                </dd>
+              </dl>
+              <p className="mt-3 border-t border-line pt-3 text-[12px] leading-relaxed text-muted">
+                {linked.length > 1
+                  ? 'Every report of this development is gathered here instead of appearing as a separate story.'
+                  : 'One report so far. Later reports of the same development are added here.'}
+              </p>
+            </section>
+
             <section className="rounded-md border border-line bg-surface p-5">
               <SideHeading>Source</SideHeading>
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary">{sourceLabel}</p>
@@ -361,10 +417,10 @@ export default async function EventDetailPage({
                   href={sourceHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label={`${OPEN_LABEL[sourceLabel] ?? 'Open source'}: ${source?.name ?? 'source'} (opens in a new tab)`}
+                  aria-label={`${openLabel}: ${source?.name ?? 'source'} (opens in a new tab)`}
                   className="mt-3 inline-flex w-fit items-center gap-1.5 text-sm font-medium text-accent hover:underline"
                 >
-                  {OPEN_LABEL[sourceLabel] ?? 'Open source'}
+                  {openLabel}
                   <span aria-hidden="true">↗</span>
                 </a>
               ) : (
@@ -377,65 +433,6 @@ export default async function EventDetailPage({
                 </p>
               ) : null}
             </section>
-
-            <section className="rounded-md border border-line bg-surface p-5">
-              <SideHeading>Canonical event</SideHeading>
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
-                <dt className="text-muted">Articles</dt>
-                <dd className="text-secondary">{Math.max(linked.length, 1)}</dd>
-                {isUpdate ? (
-                  <>
-                    <dt className="text-muted">Version</dt>
-                    <dd className="text-secondary">{version} · source page updated</dd>
-                  </>
-                ) : null}
-              </dl>
-              <p className="mt-3 text-[12px] leading-relaxed text-muted">
-                {linked.length > 1
-                  ? 'Reports of the same development are merged into this one event and kept below as evidence.'
-                  : 'One article reports this development so far. Later reports of it are merged here.'}
-              </p>
-            </section>
-
-            {versions.length > 0 ? (
-              <section className="rounded-md border border-line bg-surface p-5">
-                <SideHeading>Update history</SideHeading>
-                <p className="mb-3 text-[12px] leading-relaxed text-muted">
-                  The source page changed materially after it was first recorded. This card shows the latest version.
-                </p>
-                <ol className="space-y-2.5">
-                  <li>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary">
-                      Version {version} · current · {updatedAt}
-                    </p>
-                  </li>
-                  {versions.map((item) => (
-                    <li key={item.id}>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                        Version {item.version} · {formatUtcMeta(item.recorded_at)}
-                      </p>
-                      <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-secondary">{item.headline}</p>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            ) : null}
-
-            {citations.length > 0 ? (
-              <section className="rounded-md border border-line bg-surface p-5">
-                <SideHeading>Quoted from the source</SideHeading>
-                <ul className="space-y-3">
-                  {citations.map((citation, idx) => (
-                    <li
-                      key={idx}
-                      className="border-l-2 border-success/40 pl-3 text-[14px] leading-relaxed text-secondary"
-                    >
-                      {citation}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
 
             {supporting.length > 0 ? (
               <section className="rounded-md border border-line bg-surface p-5">
@@ -472,7 +469,32 @@ export default async function EventDetailPage({
                 </ul>
               </section>
             ) : null}
+
+            {versions.length > 0 ? (
+              <section className="rounded-md border border-line bg-surface p-5">
+                <SideHeading>Update history</SideHeading>
+                <p className="mb-3 text-[12px] leading-relaxed text-muted">
+                  The source page changed materially after it was first recorded. This page shows the latest version.
+                </p>
+                <ol className="space-y-2.5">
+                  <li>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-secondary">
+                      Version {version} · current · {updatedAt}
+                    </p>
+                  </li>
+                  {versions.map((item) => (
+                    <li key={item.id}>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                        Version {item.version} · {formatUtcMeta(item.recorded_at)}
+                      </p>
+                      <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-secondary">{item.headline}</p>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
           </aside>
+        </div>
         </div>
       </div>
     </main>

@@ -40,3 +40,4 @@ pytest-timeout==2.3.1
 # LLM_PROVIDER=anthropic / LLM_PROVIDER=bedrock. Without the package
 # installed, get_llm_provider() returns FailClosedLLMProvider with a
 # clear reason, not a crash.
+pillow==11.3.0

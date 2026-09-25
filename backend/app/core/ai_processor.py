@@ -34,6 +34,14 @@ class EventClassification(BaseModel):
         description="Score from 0-100. 0 means drop (noise/injection). 1-100 is global AI ecosystem impact.",
     )
     importance_reasoning: str = Field(description="Brief reasoning for the importance score")
+    market_category: Optional[str] = Field(
+        default=None,
+        description=(
+            "The one market area this development is about: Models, Agents, Coding, Research, Security, "
+            "Hardware, Infrastructure, Robotics, Multimodal, Open Source, Policy, Funding, Partnerships, "
+            "or None when it fits none of them (talks, events, culture, general business news)."
+        ),
+    )
 
 class SourceGroundedSummary(BaseModel):
     headline: str = Field(description="A concise, factual headline for the event. State what happened, not editorial spin.")
@@ -63,3 +71,13 @@ def generate_source_grounded_summary(articles_content: str, provider=None) -> Op
         provider = get_llm_provider()
         
     return provider.summarize_event(articles_content)
+
+
+class CategoryItem(BaseModel):
+    id: str
+    category: Optional[str] = None
+
+
+class CategoryBatch(BaseModel):
+    """Batched market-category answers for the historical backfill."""
+    items: List[CategoryItem] = Field(default_factory=list)

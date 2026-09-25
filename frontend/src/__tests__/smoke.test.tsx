@@ -15,7 +15,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 import { EventCard, type EventCardData } from '@/components/EventCard';
-import { MarketOverview, type MarketOverviewData } from '@/components/MarketOverview';
+import { MarketOverview, MarketRail, type MarketOverviewData } from '@/components/MarketOverview';
 import { evidenceLabel } from '@/lib/sources';
 import { formatUtcCardTime, hasClockTime } from '@/lib/time';
 import { proxy } from '@/proxy';
@@ -135,6 +135,16 @@ describe('EventCard', () => {
     expect(single).not.toContain('Updated');
   });
 
+  it('loads the resized thumbnail from the API, never the publisher original', () => {
+    const original = 'https://cdn.example.com/huge-original.jpg?w=4000';
+    const markup = html(<EventCard event={{ ...EVENT, image_url: original, image_role: 'source' }} />);
+    expect(markup).toContain(`/api/v1/events/${EVENT.id}/image?w=192`);
+    expect(markup).not.toContain('huge-original.jpg');
+    // Minor developments stay text-only.
+    const minor = html(<EventCard event={{ ...EVENT, importance_score: 30, image_url: original, image_role: 'source' }} />);
+    expect(minor).not.toContain('/image?w=');
+  });
+
   it('dates each card when the list has no day headings', () => {
     expect(html(<EventCard event={EVENT} withDate />)).toContain('23 Sep');
     expect(html(<EventCard event={EVENT} />)).not.toContain('23 Sep');
@@ -152,6 +162,37 @@ describe('MarketOverview', () => {
   });
 });
 
+describe('MarketOverview hierarchy', () => {
+  const card = (id: string, score: number, has_image: boolean) => ({
+    ...OVERVIEW.biggest[0], id, headline: `Headline ${id}`, importance_score: score, has_image,
+  });
+
+  it('leads with the most important development and uses images only where they exist', () => {
+    const data = { ...OVERVIEW, happening_now: [card('b', 75, false), card('a', 95, true), card('c', 72, true)] };
+    const markup = html(<MarketOverview data={data} />);
+    // The 95 leads even though it is not first in the list, with the large image.
+    expect(markup.indexOf('Headline a')).toBeLessThan(markup.indexOf('Headline b'));
+    expect(markup).toContain('/api/v1/events/a/image?w=1200');
+    expect(markup).not.toContain('/api/v1/events/b/image');
+    expect(markup).toContain('/api/v1/events/c/image?w=192');
+  });
+
+  it('shows the pulse and players rail from real counts, not a ranking', () => {
+    const data = {
+      ...OVERVIEW,
+      players: [{
+        slug: 'anthropic', name: 'Anthropic', week: 7, substantive: 3, significant: 1, sources: 4, recent: 0,
+        latest_headline: 'Claude update', latest_event_id: 'x1', event_ids: ['x1'],
+      }],
+    };
+    const markup = html(<MarketRail data={data} />);
+    expect(markup).toContain('AI market pulse');
+    expect(markup).toContain('7 developments');
+    expect(markup).toContain('3 substantive');
+    expect(markup).toContain('Not a ranking');
+  });
+});
+
 describe('homepage', () => {
   it('renders the overview, the feed and an honest paused status', async () => {
     mockFetch({
@@ -159,8 +200,8 @@ describe('homepage', () => {
       '/events/?scope=week': { body: [EVENT] },
     });
     const markup = html(await Home());
-    expect(markup).toContain('What is changing in AI');
-    expect(markup).toContain('1 canonical development this week');
+    expect(markup).toContain('What&#x27;s happening in AI');
+    expect(markup).toContain('1 development this week');
     expect(markup).toContain('Enrichment paused');
     expect(markup).toContain('12 new articles are stored');
     expect(markup).not.toContain('>Live<');

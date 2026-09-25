@@ -38,6 +38,8 @@ from app.core.importance import (
 )
 from app.core.entities import select_primary_entities
 from app.core.feed import is_feed_in_scope
+from app.core.digest import entities_named_in, is_digest, lead_segment
+from app.core.market import normalize_market_category
 from app.core.headlines import restore_headline_organization
 from app.core.origin import resolve_originating_source
 from app.core.article_body import enrich_article, MIN_CONTENT_CHARS
@@ -83,9 +85,13 @@ class IntelligencePipeline:
         LlmUnavailableError propagates, so an outage never loses it.
         pending_article_id retries a stored pending article in place.
         """
+        from app.core.llm_usage import llm_subject
+
         self._pending_ctx = None
+        subject = f"article:{pending_article_id}" if pending_article_id else f"url:{getattr(article_data, 'url', '')}"
         try:
-            result = self._process_article(article_data, source_id, fetch_fn, pending_article_id)
+            with llm_subject(subject):
+                result = self._process_article(article_data, source_id, fetch_fn, pending_article_id)
         except LlmUnavailableError as exc:
             self.last_outcome = "llm_unavailable"
             self.db.rollback()
@@ -266,7 +272,13 @@ class IntelligencePipeline:
             logger.debug(f"REJECT [content too short ({len(stripped_content)} chars)]: {url}")
             return None
         content = stripped_content
-            
+        # A newsletter digest lists unrelated stories after its lead. Every LLM
+        # call and the evidence check read the same lead segment, so the
+        # headline and the entities describe one story. The stored article
+        # keeps the full text.
+        digest = is_digest(title, content)
+        llm_content = lead_segment(title, content)
+
         # 3. Deduplicate - Exact URL or Exact Content Hash
         content_hash = generate_content_hash(content)
         if pending_article is not None:
@@ -447,7 +459,7 @@ class IntelligencePipeline:
         if not matched_event:
             self._release_db()
             try:
-                classification = self.llm.classify_event(content)
+                classification = self.llm.classify_event(llm_content)
             except LlmUnavailableError:
                 self.last_outcome = "llm_unavailable"
                 logger.error("LLM unavailable; refusing to create a mock event for %s", url)
@@ -466,6 +478,12 @@ class IntelligencePipeline:
                 self.last_outcome = "llm_unavailable"
                 logger.error("LLM raised an unexpected error for %s (treated as unavailable): %s", url, exc)
                 raise LlmUnavailableError(f"classify_event failed: {type(exc).__name__}: {exc}") from exc
+            if digest and classification is not None:
+                # Only names the lead story actually contains; the must-reads'
+                # names (ShinyHunters, FBI) are not this card's subject.
+                for field_name in ("entities", "primary_entities", "mentioned_entities"):
+                    names = getattr(classification, field_name, None) or []
+                    setattr(classification, field_name, entities_named_in(names, llm_content))
             score = normalize_importance_score(
                 classification.importance_score if classification else None
             )
@@ -576,7 +594,7 @@ class IntelligencePipeline:
                         relationship_calls["count"] += 1
                         self._release_db()
                         try:
-                            rel_result = self.llm.classify_relationship(content, existing, context=context_hint)
+                            rel_result = self.llm.classify_relationship(llm_content, existing, context=context_hint)
                         except LlmUnavailableError:
                             self.last_outcome = "llm_unavailable"
                             raise
@@ -626,7 +644,7 @@ class IntelligencePipeline:
             if not matched_event:
                 self._release_db()
                 try:
-                    summary = self.llm.summarize_event(content)
+                    summary = self.llm.summarize_event(llm_content)
                 except LlmUnavailableError:
                     self.last_outcome = "llm_unavailable"
                     logger.error("LLM unavailable; refusing to create a mock event for %s", url)
@@ -646,10 +664,10 @@ class IntelligencePipeline:
                         summary.what_changed if summary else None,
                     ) if part
                 )
-                verified_citations = validate_evidence(content, raw_citations, claim=claim)
+                verified_citations = validate_evidence(llm_content, raw_citations, claim=claim)
                 if not verified_citations and summary is not None:
                     verified_citations = fallback_source_citations(
-                        content,
+                        llm_content,
                         short_summary=summary.short_summary,
                         what_changed=summary.what_changed,
                     )
@@ -821,6 +839,11 @@ class IntelligencePipeline:
                         "event_kind": getattr(classification, "event_kind", None),
                         "scope": getattr(classification, "technical_change_scope", None),
                         "security_impact": getattr(classification, "security_impact", None),
+                        # Kept so the displayed category can use the classifier's taxonomy
+                        # answer; before this, only event_kind was stored.
+                        "market_category": normalize_market_category(
+                            getattr(classification, "market_category", None)
+                        ),
                     }
                 new_event = Event(
                     headline=summary.headline if summary else title,

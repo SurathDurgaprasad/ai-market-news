@@ -31,9 +31,27 @@ _CATEGORY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Coding", re.compile(r"\b(coding|code generation|copilot|software engineering agent)\b", re.I)),
     ("Agents", re.compile(r"\bagents?\b", re.I)),
     ("Multimodal", re.compile(r"\b(multimodal|text-to-image|text-to-video|speech model|voice model)\b", re.I)),
-    ("Open Source", re.compile(r"\b(open[- ]source|open[- ]weight|gguf|llama\.cpp)\b", re.I)),
+    ("Open Source", re.compile(r"\b(open[- ]source|open[- ]weights?|open models?|gguf|llama\.cpp)\b", re.I)),
     ("Infrastructure", re.compile(r"\b(inference cluster|data center|datacenter|gpu cluster|sagemaker)\b", re.I)),
 )
+
+# Named products whose market area is unambiguous. Checked only for generic
+# kinds, after every rule above, so a stored specific kind still wins.
+_NAMED_AREA_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("Robotics", re.compile(r"\b(reachy|humanoids?)\b", re.I)),
+    ("Research", re.compile(r"\b(alphafold|alphaevolve|theorems?)\b", re.I)),
+    ("Coding", re.compile(r"\bcodex\b", re.I)),
+    ("Multimodal", re.compile(
+        r"\b(images \d|image generation|video generation|audio model|4d reconstruction|live translate)\b", re.I)),
+    ("Models", re.compile(
+        r"\b(gemini|gemma|gpt|claude|llama|lyria|veo|pixtral|qwen|grok)[- ]?\d+(\.\d+)?\b"
+        r"|\bnew (?:\w+ )?models\b", re.I)),
+    ("Agents", re.compile(r"\b(langchain|langsmith|langgraph|deepagents|agentcore|mcp)\b", re.I)),
+    ("Infrastructure", re.compile(
+        r"\b(vllm|gpus?|inference|kernels|object storage|distributed storage|batch api)\b", re.I)),
+)
+# Headlines use typographic hyphens ("GPT\u20116"); rules are written with "-".
+_HYPHENS = re.compile("[\u2010\u2011\u2012\u2013\u2014\u2212]")
 
 _HEADLINE_SECURITY = re.compile(r"\b(malware|ransomware|vulnerability|cyberattack)\b", re.I)
 # A stored security_incident kind must be backed by security language in the
@@ -104,6 +122,22 @@ _CUSTOMER_ON_PLATFORM = re.compile(
     re.I,
 )
 
+# The product taxonomy. The classifier's market_category is accepted only
+# when it is exactly one of these (case-insensitive); anything else is None.
+MARKET_CATEGORIES = (
+    "Models", "Agents", "Coding", "Research", "Security", "Hardware", "Infrastructure",
+    "Robotics", "Multimodal", "Open Source", "Policy", "Funding", "Partnerships",
+)
+_MARKET_CATEGORY_KEYS = {label.lower(): label for label in MARKET_CATEGORIES}
+
+
+def normalize_market_category(label) -> Optional[str]:
+    """A classifier label as a taxonomy category, or None. Never guesses a near match."""
+    if not isinstance(label, str):
+        return None
+    return _MARKET_CATEGORY_KEYS.get(" ".join(label.split()).lower())
+
+
 _KIND_CATEGORY = {
     "security_incident": "Security",
     "funding": "Funding",
@@ -152,6 +186,10 @@ class MarketEvent:
     # Publisher readers should see: the validated originating publisher
     # behind an aggregator link, otherwise the ingest source.
     display_source_name: str = ""
+    # The classifier's market_category, already normalized to MARKET_CATEGORIES.
+    classified_category: str = ""
+    # Sanitized stored image URL; the card only says whether one is usable.
+    image_url: str = ""
 
 
 def _utc(moment: datetime) -> datetime:
@@ -180,7 +218,7 @@ def market_category(event: MarketEvent) -> Optional[str]:
     Security language in the headline still wins, because those words name the incident.
     """
     kind = (event.event_kind or "other").strip().lower()
-    headline = event.headline or ""
+    headline = _HYPHENS.sub("-", event.headline or "")
     if _HEADLINE_SECURITY.search(headline):
         return "Security"
     if kind == "security_incident":
@@ -190,6 +228,12 @@ def market_category(event: MarketEvent) -> Optional[str]:
     mapped = _KIND_CATEGORY.get(kind)
     if mapped:
         return mapped
+    # Generic kinds (capability, tool_update, other, ...) name no market area;
+    # the classifier's taxonomy answer does. Security still needs security
+    # language, as for the security_incident kind above.
+    classified = normalize_market_category(event.classified_category)
+    if classified and classified != "Security":
+        return classified
     if _HEADLINE_POLICY.search(headline):
         return "Policy"
     for label, pattern in _CATEGORY_RULES:
@@ -209,6 +253,9 @@ def market_category(event: MarketEvent) -> Optional[str]:
         return "Agents"
     if re.search(r"\bbedrock\b", headline, re.I) and kind in {"capability", "tool_update", "other"}:
         return "Infrastructure"
+    for label, pattern in _NAMED_AREA_RULES:
+        if pattern.search(headline):
+            return label
     return None
 
 
@@ -359,6 +406,12 @@ def _display_organization(event: MarketEvent) -> str:
     return ""
 
 
+def _has_usable_image(url: str) -> bool:
+    from app.core.presentation import classify_image_role
+
+    return bool(url) and classify_image_role(url) != "none"
+
+
 def _card(event: MarketEvent) -> dict:
     category = market_category(event)
     sources = _source_count(event)
@@ -374,6 +427,7 @@ def _card(event: MarketEvent) -> dict:
         "source_count": sources,
         "source_label": source_availability(event),
         "source_name": event.display_source_name or event.primary_source_name,
+        "has_image": _has_usable_image(event.image_url),
     }
 
 

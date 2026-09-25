@@ -113,6 +113,51 @@ first) and merges only SAME_EVENT pairs. It compares the two cards, not
 raw article text, so a newsletter roundup does not match every story it
 mentions.
 
+Categories. The classifier returns `market_category`, one of the product
+taxonomy labels (Models, Agents, Coding, Research, Security, Hardware,
+Infrastructure, Robotics, Multimodal, Open Source, Policy, Funding,
+Partnerships) or None, validated exactly (`normalize_market_category`) and
+stored in `importance_reasoning`. It is used only for generic kinds
+(capability, tool_update, other); specific kinds keep their mapping, and
+Security still requires security language. Before this, the classifier's
+`categories` were discarded and echoed the kind anyway, so a third of live
+events had no category.
+
+Stored events are categorized deterministically first: `_NAMED_AREA_RULES`
+in `app/core/market.py` map unambiguous product names (Codex, LangSmith,
+vLLM, AlphaFold, Reachy, named model families with a version) to their area,
+for generic kinds only and never to Security. Headlines are matched after
+typographic hyphens are normalized ("GPT‑6" used to miss the `gpt-N`
+rule). This categorized 76 of 280 uncategorized live events with no
+language-model request and no database write.
+
+The rest go through `manage_sources.py backfill-categories`, in three steps
+so nothing is spent or written blind: with no flag it prints the estimate
+(events, requests, input and output tokens, runtime) and makes no request;
+`--run FILE` classifies card text (headline and summary) in batches of 20
+with a compact prompt, twice, the second pass in reverse order, and saves
+the result without writing; `--apply FILE` stores only labels both passes
+agreed on (never Security), re-checking each event, with both answers kept
+in `category_backfill`; `--revert` removes them. For the 202 remaining
+events that is 22 requests and about 39k input tokens, against 558 full
+classification requests and about 880k tokens for the earlier
+two-calls-per-event design.
+
+Newsletter digests (`app/core/digest.py`). A digest such as MIT Technology
+Review's "The Download" is one URL with a lead story and a link roundup
+("The must-reads", "Quote of the day"). Classification, relationship checks,
+summarization and evidence validation all read the lead segment, and a
+digest card keeps only entities named in it; the stored article keeps the
+full text. `manage_sources.py repair-digests` reclassifies existing digest
+cards whose entities came from the roundup, only when the headline is about
+the lead story; a card whose headline came from the roundup is reported,
+because fixing it needs a new summary. `rebuild-digest-card --event ID
+--run FILE` makes that summary: classification and summary from the lead
+segment only (2 requests), citations kept only when the evidence validator
+finds them in the lead, entities limited to names the lead contains, and no
+write. `--apply FILE` checks the evidence against the stored lead again and
+keeps the old card in `digest_rebuild`.
+
 Promotional blocks (`class` containing a `promo` token, with nested divs)
 are removed by `sanitize_html`, so feed bodies and fetched pages both lose
 them before hashing and change detection.

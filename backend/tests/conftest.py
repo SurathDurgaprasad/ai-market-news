@@ -1,7 +1,31 @@
 import os
+import tempfile
+
 os.environ["TESTING"] = "1"
+# Any real provider request a test makes is recorded, in a per-run ledger,
+# never the application's own logs/llm_usage.jsonl.
+os.environ.setdefault(
+    "LLM_USAGE_LOG", os.path.join(tempfile.mkdtemp(prefix="llm-usage-tests-"), "llm_usage.jsonl")
+)
 
 import pytest
+
+LIVE_MARKERS = ("live_nvidia", "live_openai")
+
+
+def pytest_collection_modifyitems(config, items):
+    """
+    Tests marked live_nvidia / live_openai call a paid provider API. They
+    run only when explicitly requested with RUN_LIVE_LLM_TESTS=1: an API key
+    being present in the environment is not consent to spend it, and a plain
+    `pytest` must never make a network call to a language model.
+    """
+    if os.environ.get("RUN_LIVE_LLM_TESTS") == "1":
+        return
+    skip = pytest.mark.skip(reason="live provider test: set RUN_LIVE_LLM_TESTS=1 to run")
+    for item in items:
+        if any(item.get_closest_marker(name) for name in LIVE_MARKERS):
+            item.add_marker(skip)
 from app.core.providers.llm import get_llm_provider, TestLLMProvider
 
 @pytest.fixture

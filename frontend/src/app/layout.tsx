@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import { SiteHeader } from "@/components/SiteHeader";
+import { SiteFooter } from "@/components/SiteFooter";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,9 +15,16 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Editorial headlines. UI text, numbers and labels stay in Geist.
+const newsreader = Newsreader({
+  variable: "--font-newsreader",
+  subsets: ["latin"],
+  axes: ["opsz"],
+});
+
 export const metadata: Metadata = {
-  title: { default: "AI World Intelligence", template: "%s · AI World Intelligence" },
-  description: "Live, source-grounded intelligence on the global AI ecosystem.",
+  title: { default: "AI Market News", template: "%s · AI Market News" },
+  description: "What is happening in AI: the biggest developments, what is trending and who is involved, from the original sources.",
 };
 
 export default function RootLayout({
@@ -27,7 +35,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${newsreader.variable} h-full antialiased`}
       style={{ colorScheme: "dark" }}
     >
       <body className="min-h-full flex flex-col">
@@ -41,6 +49,7 @@ export default function RootLayout({
         <div id="content" className="flex flex-1 flex-col">
           {children}
         </div>
+        <SiteFooter />
       </body>
     </html>
   );

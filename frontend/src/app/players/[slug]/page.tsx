@@ -80,20 +80,20 @@ export default async function PlayerPage({
 
   return (
     <main className="flex-1 bg-canvas text-ink selection:bg-accent/30">
-      <div className="intel-shell py-6 lg:py-8">
-        <nav className="mb-6" aria-label="Breadcrumb">
+      <div className="intel-shell py-7 lg:py-9">
+        <nav className="mb-7" aria-label="Breadcrumb">
           <Link href="/#players" className="text-[13px] font-medium text-secondary hover:text-ink">
             ← Major AI players
           </Link>
         </nav>
-        <header className="mb-8 border-b border-line pb-5">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">This week</p>
-          <h1 className="mt-1 text-[1.75rem] font-semibold tracking-tight text-ink">{name}</h1>
-          <p className="mt-1 text-[13px] text-muted">
+        <header className="mb-8 border-b border-line pb-6">
+          <p className="intel-kicker">This week</p>
+          <h1 className="font-display mt-1.5 text-[2.4rem] font-semibold leading-none text-ink md:text-[2.9rem]">{name}</h1>
+          <p className="mt-2.5 max-w-[80ch] text-[13.5px] text-muted">
             Developments published by {name} or naming it in both the headline and the extracted entities.
           </p>
           {stats.length > 0 ? (
-            <p className="mt-3 text-[13px] tabular-nums text-secondary">
+            <p className="mt-3 text-[14px] tabular-nums text-secondary">
               {stats.join(" · ")}
               {summary?.categories && summary.categories.length > 0
                 ? ` · mostly ${summary.categories.join(" and ")}`
@@ -111,7 +111,7 @@ export default async function PlayerPage({
         ) : events.length === 0 ? (
           <p className="text-sm text-muted">No developments attributed to {name} this week.</p>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-6">
             {events.some((event) => event.importance_score >= 70) ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {events
@@ -122,7 +122,7 @@ export default async function PlayerPage({
               </div>
             ) : null}
             {events.some((event) => event.importance_score < 70) ? (
-              <ul className="divide-y divide-line overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface">
+              <ul className="divide-y divide-line border-y border-line">
                 {events
                   .filter((event) => event.importance_score < 70)
                   .map((event) => (

@@ -1,6 +1,4 @@
-'use client';
-
-import React, { useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
 import { factualSummary, formatUtcCardTime, formatUtcWhen } from '@/lib/time';
 import { displaySource, evidenceLabel, type SourceRef } from '@/lib/sources';
@@ -12,6 +10,7 @@ import {
 } from '@/lib/importance';
 import { safeHttpUrl } from '@/lib/urls';
 import { CategoryTag } from '@/components/ui';
+import { EventImage } from '@/components/EventImage';
 
 export interface EventCardData {
   id: string;
@@ -38,12 +37,12 @@ export const EventCard: React.FC<{
   // Lists without day headings (player pages) need the date on every card.
   withDate?: boolean;
 }> = ({ event, headingLevel: Heading = 'h3', withDate = false }) => {
-  const [imageFailed, setImageFailed] = useState(false);
   const tier = importanceMeta(event.importance_score);
   const source = displaySource(event);
+  // The URL only decides whether there is an image; the API serves a resized copy.
   const showImage =
-    !imageFailed && shouldShowCardImage(event.image_url, event.image_role, tier.key);
-  const safeImageUrl = showImage ? safeHttpUrl(event.image_url, { keepQuery: true }) : undefined;
+    Boolean(safeHttpUrl(event.image_url, { keepQuery: true })) &&
+    shouldShowCardImage(event.image_url, event.image_role, tier.key);
   const sourceHref =
     safeHttpUrl(event.article_url) || safeHttpUrl(source?.url) || safeHttpUrl(event.primary_source?.url);
   const sourceLabel = evidenceLabel({ url: sourceHref, tier: source?.tier });
@@ -80,21 +79,16 @@ export const EventCard: React.FC<{
           {/* Text first; the image is an identifying thumbnail at one fixed ratio,
               so cards with and without images align in every row. */}
           <div className="flex items-start gap-3">
-            <Heading className={`mb-2 line-clamp-3 min-w-0 flex-1 font-semibold tracking-tight text-ink group-hover:text-accent ${tier.title}`}>
+            <Heading className={`font-display headline-hover mb-2 line-clamp-3 min-w-0 flex-1 font-medium text-ink ${tier.title}`}>
               {event.headline}
             </Heading>
-            {safeImageUrl ? (
-              <div className="relative mt-0.5 h-16 w-24 shrink-0 overflow-hidden rounded-[4px] border border-line bg-elevated">
-                <img
-                  src={safeImageUrl}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                  className="absolute inset-0 h-full w-full object-cover"
-                  onError={() => setImageFailed(true)}
-                />
-              </div>
+            {showImage ? (
+              <EventImage
+                id={event.id}
+                size="thumb"
+                category={event.category}
+                className="mt-0.5 h-16 w-24 shrink-0 rounded-[4px] border border-line"
+              />
             ) : null}
           </div>
 

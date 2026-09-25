@@ -22,3 +22,12 @@ def is_test_runtime() -> bool:
         return True
     from app.core.config import settings
     return bool(settings.TEST_MODE)
+
+
+def scheduler_enabled() -> bool:
+    """Scheduled ingestion runs unless tests or SCHEDULER_ENABLED=0 turn it off.
+
+    SCHEDULER_ENABLED=0 serves stored developments without fetching sources
+    or calling the language model (UI review, demos, read-only replicas).
+    """
+    return not is_test_runtime() and env_flag("SCHEDULER_ENABLED", default=True)

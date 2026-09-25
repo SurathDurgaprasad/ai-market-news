@@ -19,7 +19,7 @@ export function importanceMeta(score: number): {
       card: "border-line",
       accent: "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-warning",
       image: "aspect-[16/8] max-h-44",
-      title: "text-[1.35rem] leading-snug md:text-[1.45rem]",
+      title: "text-[1.45rem] leading-[1.18] md:text-[1.55rem]",
     };
   }
   if (score >= 70) {
@@ -30,7 +30,7 @@ export function importanceMeta(score: number): {
       card: "border-line",
       accent: "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-accent",
       image: "aspect-[16/9] max-h-40",
-      title: "text-[1.2rem] leading-snug",
+      title: "text-[1.3rem] leading-[1.2]",
     };
   }
   if (score >= 50) {
@@ -41,7 +41,7 @@ export function importanceMeta(score: number): {
       card: "border-line",
       accent: "",
       image: "aspect-[16/10] max-h-36",
-      title: "text-[1.05rem] leading-snug",
+      title: "text-[1.15rem] leading-[1.22]",
     };
   }
   return {
@@ -51,7 +51,7 @@ export function importanceMeta(score: number): {
     card: "border-line",
     accent: "",
     image: "",
-    title: "text-[0.98rem] leading-snug",
+    title: "text-[1.05rem] leading-[1.25]",
   };
 }
 
@@ -75,18 +75,4 @@ export function shouldShowCardImage(
   if (imageRole === "none") return false;
   if (importance === "minor") return false;
   return true;
-}
-
-export function cardImageClass(
-  imageRole: ImageRole | undefined,
-  importanceFallback: string,
-): string {
-  if (imageRole === "hero") return "aspect-[16/8] max-h-44";
-  if (imageRole === "source") return "aspect-[16/10] max-h-[8.25rem]";
-  return importanceFallback;
-}
-
-export function detailImageClass(imageRole: ImageRole | undefined): string {
-  if (imageRole === "hero") return "aspect-[21/6] max-h-[180px]";
-  return "aspect-[21/5] max-h-[120px]";
 }

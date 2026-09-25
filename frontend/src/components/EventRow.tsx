@@ -46,7 +46,7 @@ export function EventRow({
         )}
       </div>
       <div className="min-w-0">
-        <Heading className="text-[14.5px] font-medium leading-snug text-ink">
+        <Heading className="font-display text-[1.05rem] font-medium leading-snug text-ink">
           <Link href={`/events/${event.id}`} className="after:absolute after:inset-0 hover:text-accent">
             {event.headline}
           </Link>

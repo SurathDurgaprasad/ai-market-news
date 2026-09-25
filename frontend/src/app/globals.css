@@ -6,13 +6,13 @@
  * per category). Components use the Tailwind names in @theme below.
  */
 :root {
-  --background: #0e1216;
-  --foreground: #e9eef3;
-  --surface: #151b21;
-  --surface-elevated: #1c242d;
-  --surface-hover: #19212a;
-  --border: #2a3440;
-  --border-strong: #3a4654;
+  --background: #0c0f13;
+  --foreground: #eef1f4;
+  --surface: #13171d;
+  --surface-elevated: #1b2129;
+  --surface-hover: #171c23;
+  --border: #252c35;
+  --border-strong: #38424f;
   --text-secondary: #c3ccd5;
   --text-muted: #95a2b1;
   --accent: #8fb4d6;
@@ -55,6 +55,7 @@
   --color-danger-fill: var(--danger-fill);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-newsreader);
 }
 
 body {
@@ -81,6 +82,56 @@ body {
   .intel-shell {
     padding-inline: 2.5rem;
   }
+}
+
+/* Editorial headline face: optical sizing on, slightly tight, never bold-black. */
+.font-display {
+  font-family: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  font-optical-sizing: auto;
+  font-feature-settings: "kern", "liga";
+  letter-spacing: -0.005em;
+}
+
+/* A headline link inside a card: the whole card is the target. */
+.card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.headline-hover {
+  transition: color 120ms ease;
+}
+
+.group:hover .headline-hover,
+.headline-hover:hover {
+  color: #ffffff;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  text-decoration-color: var(--border-strong);
+}
+
+/* Image frame: a quiet tint of the category colour shows while loading or when an image fails. */
+.image-frame {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--plate, var(--cat-neutral)) 22%, transparent), transparent 70%),
+    var(--surface-elevated);
+}
+
+.image-frame img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 300ms ease;
+}
+
+.group:hover .image-frame img {
+  transform: scale(1.02);
 }
 
 /* Section kicker + title, shared by every section heading. */
@@ -136,7 +187,12 @@ summary:focus-visible {
     animation: none;
   }
   .intel-card,
-  .intel-row {
+  .intel-row,
+  .headline-hover,
+  .image-frame img {
     transition: none;
+  }
+  .group:hover .image-frame img {
+    transform: none;
   }
 }

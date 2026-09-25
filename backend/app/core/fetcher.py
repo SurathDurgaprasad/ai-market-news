@@ -22,6 +22,7 @@ Remaining limitation (documented, not claimed solved):
 from __future__ import annotations
 
 import logging
+from typing import Optional
 import threading
 import socket
 import ipaddress
@@ -150,7 +151,7 @@ def is_transient_error(response: httpx.Response) -> bool:
     return response.status_code == 429 or response.status_code >= 500
 
 
-def _reject_oversized_declared_length(response: httpx.Response) -> None:
+def _reject_oversized_declared_length(response: httpx.Response, max_bytes: int = MAX_RESPONSE_BYTES) -> None:
     """
     Fast-path rejection using the Content-Length header alone, before any
     body bytes are read. This is the wire size — for a compressed
@@ -167,7 +168,7 @@ def _reject_oversized_declared_length(response: httpx.Response) -> None:
         except ValueError:
             declared = None
         else:
-            if declared > MAX_RESPONSE_BYTES:
+            if declared > max_bytes:
                 raise ValueError(f"Response too large ({declared} bytes)")
 
 
@@ -192,7 +193,7 @@ def _headers_for_already_decoded_body(original_headers: httpx.Headers) -> httpx.
     return httpx.Headers(headers)
 
 
-def _read_body_with_cap(response: httpx.Response) -> bytes:
+def _read_body_with_cap(response: httpx.Response, max_bytes: int = MAX_RESPONSE_BYTES) -> bytes:
     """
     Read a streamed response body with a hard cap on the DECOMPRESSED
     size, aborting as soon as the cap is crossed rather than fully
@@ -220,8 +221,8 @@ def _read_body_with_cap(response: httpx.Response) -> bytes:
     buffer = bytearray()
     for chunk in response.iter_bytes():
         buffer.extend(chunk)
-        if len(buffer) > MAX_RESPONSE_BYTES:
-            raise ValueError(f"Response too large (exceeded {MAX_RESPONSE_BYTES} bytes during streamed read)")
+        if len(buffer) > max_bytes:
+            raise ValueError(f"Response too large (exceeded {max_bytes} bytes during streamed read)")
     return bytes(buffer)
 
 
@@ -234,7 +235,14 @@ def _read_body_with_cap(response: httpx.Response) -> bytes:
     ),
     reraise=True
 )
-def fetch_url(url: str, timeout: int = 15, max_redirects: int = 5) -> httpx.Response:
+def fetch_url(
+    url: str,
+    timeout: int = 15,
+    max_redirects: int = 5,
+    *,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+    accept: Optional[str] = None,
+) -> httpx.Response:
     """
     Fetch a URL with exponential backoff.
 
@@ -247,7 +255,7 @@ def fetch_url(url: str, timeout: int = 15, max_redirects: int = 5) -> httpx.Resp
     current_url = url
     headers = {
         "User-Agent": "AIWorldIntelligencePlatform/1.0 (feed-ingest)",
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+        "Accept": accept or "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
     }
 
     try:
@@ -290,8 +298,8 @@ def fetch_url(url: str, timeout: int = 15, max_redirects: int = 5) -> httpx.Resp
                             request=streamed.request,
                         )
 
-                    _reject_oversized_declared_length(streamed)
-                    body = _read_body_with_cap(streamed)
+                    _reject_oversized_declared_length(streamed, max_bytes)
+                    body = _read_body_with_cap(streamed, max_bytes)
                     response = httpx.Response(
                         status_code=streamed.status_code,
                         headers=_headers_for_already_decoded_body(streamed.headers),

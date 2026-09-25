@@ -8,7 +8,7 @@ setup_logging()
 
 from contextlib import asynccontextmanager
 from app.core.scheduler import scheduler
-from app.core.runtime import is_test_runtime
+from app.core.runtime import is_test_runtime, scheduler_enabled
 from app.core.providers.llm import (
     resolve_llm_mode,
     LLM_UNAVAILABLE,
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
         mode,
         provider_name,
         is_test_runtime(),
-        not is_test_runtime(),
+        scheduler_enabled(),
     )
     if mode == LLM_UNAVAILABLE:
         logging.getLogger(__name__).error(
@@ -40,9 +40,10 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         from app.db.session import ensure_sqlite_columns
         ensure_sqlite_columns(engine)
+    if scheduler_enabled():
         scheduler.start()
     yield
-    if not is_test_runtime():
+    if scheduler_enabled():
         scheduler.stop()
 
 app = FastAPI(
@@ -74,7 +75,7 @@ from app.api.router import api_router
 @app.get("/api/health")
 async def health_check():
     from app.core.providers.llm import resolve_llm_mode, LLM_UNAVAILABLE, configured_llm_provider_name
-    from app.core.runtime import is_test_runtime
+    from app.core.runtime import is_test_runtime, scheduler_enabled
     mode = resolve_llm_mode()
     return {
         "status": "degraded" if mode == LLM_UNAVAILABLE else "ok",
@@ -82,7 +83,7 @@ async def health_check():
         "llm_mode": mode,
         "llm_provider": "test" if mode == "test" else configured_llm_provider_name(),
         "test_runtime": is_test_runtime(),
-        "scheduler_enabled": not is_test_runtime(),
+        "scheduler_enabled": scheduler_enabled(),
         "enrichment_paused": scheduler.enrichment_paused(),
     }
 

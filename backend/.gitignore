@@ -6,3 +6,7 @@ __pycache__/
 .pytest_cache/
 nvidia_live_report.json
 openai_live_report.json
+
+# Generated at runtime: resized source images and the LLM usage ledger
+image_cache/
+logs/

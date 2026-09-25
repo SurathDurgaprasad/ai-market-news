@@ -17,24 +17,19 @@ export function SiteHeader() {
   const current = pathname.startsWith("/admin") ? "/admin" : pathname.startsWith("/players") ? "/players" : "";
 
   return (
-    <header className="z-40 border-b border-line bg-canvas md:sticky md:top-0">
-      <div className="intel-shell flex min-h-12 flex-wrap items-center justify-between gap-x-6 gap-y-1 py-2">
-        <Link href="/" className="group inline-flex items-center gap-2.5" aria-label="AI World Intelligence, market overview">
+    <header className="z-40 border-b border-line bg-canvas/95 backdrop-blur-sm md:sticky md:top-0">
+      <div className="intel-shell flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-1 py-2">
+        <Link href="/" className="group inline-flex items-baseline gap-2" aria-label="AI Market News, home">
+          <span className="font-display text-[22px] font-semibold leading-none tracking-[-0.01em] text-ink">
+            AI Market News
+          </span>
           <span
-            className="grid h-6 w-6 place-items-center rounded-[4px] border border-accent/50 bg-accent/10 text-[10px] font-bold tracking-tight text-accent"
+            className="mb-0.5 hidden h-1.5 w-1.5 rounded-full bg-accent sm:inline-block"
             aria-hidden="true"
-          >
-            AI
-          </span>
-          <span className="text-[13px] font-semibold uppercase tracking-[0.14em] text-ink group-hover:text-accent">
-            World Intelligence
-          </span>
-          <span className="hidden border-l border-line pl-2.5 text-[12px] text-muted md:inline">
-            AI market intelligence
-          </span>
+          />
         </Link>
         <nav aria-label="Primary">
-          <ul className="flex flex-wrap items-center gap-x-1 text-[13px]">
+          <ul className="flex flex-wrap items-center gap-x-0.5 text-[13.5px]">
             {NAV.map((item) => {
               const active = current !== "" && item.area === current;
               return (
@@ -42,8 +37,8 @@ export function SiteHeader() {
                   <Link
                     href={item.href}
                     aria-current={active ? "page" : undefined}
-                    className={`rounded px-2.5 py-1.5 transition-colors hover:bg-elevated hover:text-ink ${
-                      active ? "bg-elevated text-ink" : "text-muted"
+                    className={`rounded px-3 py-1.5 transition-colors hover:bg-elevated hover:text-ink ${
+                      active ? "bg-elevated text-ink" : "text-secondary"
                     }`}
                   >
                     {item.label}

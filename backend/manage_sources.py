@@ -12,6 +12,10 @@ From the backend/ directory:
     python manage_sources.py repair-headlines [--apply]
     python manage_sources.py repair-versions [--refetch] [--apply]
     python manage_sources.py recheck-duplicates [--max-checks N] [--apply]
+    python manage_sources.py backfill-categories [--run FILE | --apply FILE | --revert]
+    python manage_sources.py llm-usage [--hours N]
+    python manage_sources.py repair-digests [--apply]
+    python manage_sources.py rebuild-digest-card --event ID --run FILE | --apply FILE
 
 `ingest` runs one scheduler cycle immediately. The running API also picks up
 enabled rows on its next tick. Disabled rows are not fetched.
@@ -225,6 +229,133 @@ def cmd_recheck_duplicates(args) -> int:
     return 0
 
 
+def cmd_backfill_categories(args) -> int:
+    """
+    Three steps, so no LLM request is made without a printed estimate and
+    no database write happens without a saved, reviewable dry run:
+      (default)      estimate only: events, requests, tokens, runtime. No calls.
+      --run FILE     two batched passes; agreed labels saved to FILE. No writes.
+      --apply FILE   store the agreed labels from FILE. No calls.
+      --revert       remove every backfilled label.
+    """
+    import json
+
+    from app.core.consolidate import (
+        apply_category_backfill,
+        category_backfill_candidates,
+        classify_categories_batched,
+        estimate_category_backfill,
+        revert_category_backfill,
+    )
+
+    db = _ready()
+    try:
+        if args.revert:
+            print(f"{revert_category_backfill(db)} backfilled label(s) removed")
+            return 0
+        if args.apply:
+            with open(args.apply, encoding="utf-8") as handle:
+                rows = json.load(handle)
+            applied = apply_category_backfill(db, rows)
+            print(f"{applied} label(s) stored from {args.apply} ({sum(1 for r in rows if r.get('label'))} agreed in the file)")
+            return 0
+        events = category_backfill_candidates(db, limit=args.limit)
+        plan = estimate_category_backfill(events, args.batch)
+        print(
+            "estimate: {events} events, {requests} requests (2 passes x batches of {batch_size}), "
+            "~{input_tokens} input tokens, ~{output_tokens} output tokens, ~{runtime_seconds}s".format(**plan)
+        )
+        if not args.run:
+            print("No requests made. Pass --run FILE to classify (dry run, no database writes).")
+            return 0
+        from app.core.providers.llm import get_llm_provider, resolve_llm_mode
+
+        if resolve_llm_mode() != "production":
+            print("No production LLM is configured; nothing was classified.")
+            return 2
+        rows = classify_categories_batched(get_llm_provider(), events, batch_size=args.batch, pause_seconds=args.pause)
+    finally:
+        db.close()
+    with open(args.run, "w", encoding="utf-8") as handle:
+        json.dump(rows, handle, indent=1)
+    agreed = [row for row in rows if row["label"]]
+    for row in rows:
+        verdict = f"would set {row['label']}" if row["label"] else "keep none"
+        print(f"{verdict:24} a={row['pass_a'] or '-':14} b={row['pass_b'] or '-':14} {row['headline'][:80]!r}")
+    print(f"{len(agreed)} of {len(rows)} agreed. Saved to {args.run}; review, then --apply {args.run}")
+    return 0
+
+
+def cmd_llm_usage(args) -> int:
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.llm_usage import ledger_path, read_ledger, summarize
+
+    since = datetime.now(timezone.utc) - timedelta(hours=args.hours) if args.hours else None
+    rows = read_ledger(since)
+    print(f"ledger: {ledger_path()}  rows: {len(rows)}")
+    for operation, entry in sorted(summarize(rows).items()):
+        print(
+            f"{operation:28} requests={entry['requests']:5} failed={entry['failed']:4} "
+            f"in={entry['input_tokens']:8} out={entry['output_tokens']:7} latency_ms={entry['latency_ms']}"
+        )
+    return 0
+
+
+def cmd_repair_digests(args) -> int:
+    from app.core.consolidate import repair_digest_events
+    from app.core.providers.llm import get_llm_provider, resolve_llm_mode
+
+    if resolve_llm_mode() != "production":
+        print("No production LLM is configured; nothing was checked.")
+        return 2
+    db = _ready()
+    try:
+        repaired = repair_digest_events(db, get_llm_provider(), apply=args.apply)
+    finally:
+        db.close()
+    fixed = 0
+    for headline, old, new, status in repaired:
+        if status == "repaired":
+            fixed += 1
+            print(f"{'repaired' if args.apply else 'would repair'}: {headline[:80]!r} entities {old} -> {new}")
+        else:
+            print(f"skipped ({status}; needs a new summary): {headline[:80]!r} entities {old}")
+    print(f"{fixed} digest card(s) {'repaired' if args.apply else 'to repair (dry run; pass --apply)'}")
+    return 0
+
+
+def cmd_rebuild_digest_card(args) -> int:
+    """--run FILE: two LLM requests, proposal saved, no writes. --apply FILE: store it, no requests."""
+    import json
+
+    from app.core.consolidate import apply_digest_rebuild, propose_digest_rebuild
+
+    db = _ready()
+    try:
+        if args.apply:
+            with open(args.apply, encoding="utf-8") as handle:
+                print(apply_digest_rebuild(db, json.load(handle)))
+            return 0
+        from app.core.providers.llm import get_llm_provider, resolve_llm_mode
+
+        if resolve_llm_mode() != "production":
+            print("No production LLM is configured; nothing was rebuilt.")
+            return 2
+        print("estimate: 2 requests (classify + summarize of the lead story)")
+        proposal = propose_digest_rebuild(db, get_llm_provider(), args.event)
+    finally:
+        db.close()
+    with open(args.run, "w", encoding="utf-8") as handle:
+        json.dump(proposal, handle, indent=1, default=str)
+    print(f"{proposal['status']}: saved to {args.run}")
+    if proposal["status"] == "proposed":
+        print(f"  old: {proposal['old']['headline']!r} entities {proposal['old']['entities']}")
+        print(f"  new: {proposal['new']['headline']!r} entities {proposal['new']['entities']}")
+        print(f"  citations: {proposal['new']['citations']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage intelligence sources")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -283,6 +414,40 @@ def main(argv: list[str] | None = None) -> int:
     recheck.add_argument("--apply", action="store_true")
     recheck.add_argument("--max-checks", type=int, default=60)
     recheck.set_defaults(func=cmd_recheck_duplicates)
+
+    backfill = sub.add_parser(
+        "backfill-categories",
+        help="Categorize live events stored before the classifier returned a market category",
+    )
+    step = backfill.add_mutually_exclusive_group()
+    step.add_argument("--run", metavar="FILE", help="Classify (two batched passes) and save the dry run to FILE")
+    step.add_argument("--apply", metavar="FILE", help="Store the agreed labels from a saved dry run")
+    step.add_argument("--revert", action="store_true", help="Remove every backfilled label")
+    backfill.add_argument("--limit", type=int, default=300)
+    backfill.add_argument("--batch", type=int, default=20)
+    backfill.add_argument("--pause", type=float, default=3.0, help="Seconds between requests (provider rate limit)")
+    backfill.set_defaults(func=cmd_backfill_categories)
+
+    usage = sub.add_parser("llm-usage", help="Summarize provider requests from the usage ledger")
+    usage.add_argument("--hours", type=float, default=0, help="Only the last N hours (default: all)")
+    usage.set_defaults(func=cmd_llm_usage)
+
+    digests = sub.add_parser(
+        "repair-digests",
+        help="Reclassify newsletter-digest cards whose entities came from another story",
+    )
+    digests.add_argument("--apply", action="store_true")
+    digests.set_defaults(func=cmd_repair_digests)
+
+    rebuild = sub.add_parser(
+        "rebuild-digest-card",
+        help="Rebuild a digest card whose headline came from the roundup, from the lead story",
+    )
+    rebuild.add_argument("--event", required=False)
+    rebuild_step = rebuild.add_mutually_exclusive_group(required=True)
+    rebuild_step.add_argument("--run", metavar="FILE")
+    rebuild_step.add_argument("--apply", metavar="FILE")
+    rebuild.set_defaults(func=cmd_rebuild_digest_card)
 
     args = parser.parse_args(argv)
     try:

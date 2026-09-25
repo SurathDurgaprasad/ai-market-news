@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Any, Literal
@@ -320,6 +320,8 @@ def _to_market_event(event: Event, sources: list, primary_hosts: Optional[set] =
         primary_source_name=primary_name,
         primary_source_tier=(event.primary_source.tier or "") if event.primary_source else "",
         display_source_name=(origin.official_name if origin.used_official else primary_name) or "",
+        classified_category=str(reasoning.get("market_category") or ""),
+        image_url=_safe_http_url(event.image_url, keep_query=True) or "",
     )
 
 
@@ -718,6 +720,38 @@ def resolve_event(event_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Event not found")
     canonical = _canonical_of(db, event) if event.superseded_by_id is not None else event
     return {"id": str(event.id), "canonical_id": str(canonical.id)}
+
+
+@router.get("/{event_id}/image")
+def get_event_image(event_id: str, w: int = Query(640, ge=16, le=4096), db: Session = Depends(get_db)):
+    """
+    The event's image as a resized WebP (192, 640 or 1200 px wide), so a
+    96-px thumbnail no longer downloads a multi-megabyte original. The source
+    URL is the one stored for the event, never one supplied by the request;
+    see app/core/thumbnails.py for the fetch and decode limits.
+    """
+    from app.core.thumbnails import thumbnail
+
+    try:
+        event_uuid = uuid_module.UUID(event_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    event = db.query(Event).filter(Event.id == event_uuid).first()
+    image_url = _safe_http_url(event.image_url, keep_query=True) if event else None
+    if not image_url or classify_image_role(image_url) == "none":
+        raise HTTPException(status_code=404, detail="Image not found")
+    data = thumbnail(image_url, w)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return Response(
+        content=data,
+        media_type="image/webp",
+        headers={
+            "Cache-Control": "public, max-age=604800",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'",
+        },
+    )
 
 
 @router.get("/{event_id}", response_model=EventResponse)
