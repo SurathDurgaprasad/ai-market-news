@@ -118,7 +118,7 @@ def test_health_check():
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert "AI World Intelligence Platform" in body["service"]
+    assert body["service"] == "AI Market News API"
     assert body["llm_mode"] == "test"
     assert body["llm_provider"] == "test"
     assert body["test_runtime"] is True

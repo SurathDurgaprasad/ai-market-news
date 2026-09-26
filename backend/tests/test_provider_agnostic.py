@@ -1,5 +1,5 @@
 """
-PROVIDER-AGNOSTIC-01 (docs/RED_TEAM_REPORT.md): the LLM architecture must
+PROVIDER-AGNOSTIC-01 (docs/security-findings.md): the LLM architecture must
 be genuinely provider-agnostic across NVIDIA, OpenAI, Anthropic, and
 Bedrock, with the pipeline depending only on the LLMProvider contract and
 never seeing a raw provider-specific exception.
@@ -233,11 +233,20 @@ def _summary_fixture():
     )
 
 
+def _optional_sdk(module: str):
+    """anthropic and boto3 are optional installs (see requirements.txt)."""
+    import importlib.util
+
+    return pytest.mark.skipif(importlib.util.find_spec(module) is None, reason=f"{module} not installed")
+
+
 @pytest.mark.parametrize("provider_factory", [
-    lambda: NVIDIAProvider(api_key="fake", model="fake-model"),
-    lambda: OpenAIProvider(api_key="fake", model="fake-model"),
-    lambda: AnthropicProvider(api_key="fake", model="fake-model"),
-    lambda: BedrockProvider(model="fake-model", region_name="us-east-1"),
+    pytest.param(lambda: NVIDIAProvider(api_key="fake", model="fake-model"), id="nvidia"),
+    pytest.param(lambda: OpenAIProvider(api_key="fake", model="fake-model"), id="openai"),
+    pytest.param(lambda: AnthropicProvider(api_key="fake", model="fake-model"), id="anthropic",
+                 marks=_optional_sdk("anthropic")),
+    pytest.param(lambda: BedrockProvider(model="fake-model", region_name="us-east-1"), id="bedrock",
+                 marks=_optional_sdk("boto3")),
 ])
 def test_pipeline_behavior_identical_regardless_of_provider(db_session, provider_factory):
     """

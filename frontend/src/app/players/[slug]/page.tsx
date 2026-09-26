@@ -5,22 +5,8 @@ import { EventCard, type EventCardData } from "@/components/EventCard";
 import { EventRow } from "@/components/EventRow";
 import type { MarketOverviewData, PlayerActivity } from "@/components/MarketOverview";
 import { API_V1 } from "@/lib/api";
+import { PLAYER_NAMES, isKnownPlayer } from "@/lib/players";
 import { formatUtcWhen } from "@/lib/time";
-
-// Mirrors backend app/core/market.py PLAYERS. The API rejects unknown slugs.
-const PLAYER_NAMES: Record<string, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  google: "Google / DeepMind",
-  microsoft: "Microsoft",
-  meta: "Meta",
-  nvidia: "NVIDIA",
-  xai: "xAI",
-  amazon: "Amazon",
-  alibaba: "Alibaba / Qwen",
-  mistral: "Mistral",
-  huggingface: "Hugging Face",
-};
 
 async function getPlayerEvents(slug: string): Promise<EventCardData[] | null | "missing"> {
   try {
@@ -55,7 +41,8 @@ export async function generateMetadata({
 }: {
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
-  const name = PLAYER_NAMES[(await params).slug];
+  const requested = (await params).slug;
+  const name = isKnownPlayer(requested) ? PLAYER_NAMES[requested] : undefined;
   return { title: name ? `${name} this week` : "Player not found" };
 }
 
@@ -65,7 +52,7 @@ export default async function PlayerPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const name = PLAYER_NAMES[slug];
+  const name = isKnownPlayer(slug) ? PLAYER_NAMES[slug] : undefined;
   if (!name) notFound();
   const [events, summary] = await Promise.all([getPlayerEvents(slug), getPlayerSummary(slug)]);
   if (events === "missing") notFound();
@@ -105,7 +92,7 @@ export default async function PlayerPage({
 
         {!events ? (
           <div className="rounded-md border border-danger/40 bg-danger/10 p-6 text-center text-danger" role="alert">
-            <p className="font-semibold">Intelligence API unavailable</p>
+            <p className="font-semibold">News service unavailable</p>
             <p className="mt-1 text-sm">Developments for {name} could not be loaded.</p>
           </div>
         ) : events.length === 0 ? (

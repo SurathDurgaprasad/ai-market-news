@@ -101,7 +101,7 @@ export default async function AdminSourcesPage() {
 
         {sources === null ? (
           <div className="rounded-md border border-danger/40 bg-danger/10 p-6 text-center text-danger" role="alert">
-            <p className="font-semibold">Intelligence API unavailable</p>
+            <p className="font-semibold">News service unavailable</p>
           </div>
         ) : (
           <>

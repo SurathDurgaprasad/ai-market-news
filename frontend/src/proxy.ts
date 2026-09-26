@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { API_V1 } from '@/lib/api';
+import { isKnownPlayer } from '@/lib/players';
 
 /**
  * Event pages stream behind loading.tsx, and a streamed response is already
@@ -11,13 +12,19 @@ import { API_V1 } from '@/lib/api';
  *                      app's not-found page
  * - merged duplicate -> 308 to the canonical event
  * - API unreachable -> pass through; the page shows its unavailable state
+ *
+ * Player pages stream the same way; an unknown slug is a 404 without any
+ * API call, because the set of players is fixed.
  */
 const RESOLVE_TIMEOUT_MS = 2000;
 const UUID = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const MISSING = '/_missing/event';
 
 export async function proxy(request: NextRequest) {
-  const id = request.nextUrl.pathname.split('/')[2] ?? '';
+  const [, section = '', id = ''] = request.nextUrl.pathname.split('/');
+  if (section === 'players') {
+    return isKnownPlayer(id) ? NextResponse.next() : NextResponse.rewrite(new URL(MISSING, request.url));
+  }
   if (!UUID.test(id)) {
     return NextResponse.rewrite(new URL(MISSING, request.url));
   }
@@ -60,5 +67,6 @@ export const config = {
         { type: 'header', key: 'purpose', value: 'prefetch' },
       ],
     },
+    { source: '/players/:slug' },
   ],
 };

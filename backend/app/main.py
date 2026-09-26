@@ -47,21 +47,21 @@ async def lifespan(app: FastAPI):
         scheduler.stop()
 
 app = FastAPI(
-    title="AI World Intelligence Platform API",
-    description="Internal API for the AI World Intelligence Platform dashboard and ingestion pipeline.",
-    version="1.0.0",
+    title="AI Market News API",
+    description="Read API for AI Market News: canonical AI developments, their sources, and ingestion status.",
+    version="0.1.0",
     lifespan=lifespan
 )
 
 from app.core.config import settings
 
 # No wildcard + no credentials: this API has no cookie/session auth
-# (confirmed by absence of any auth module — docs/ARCHITECTURE.md §5), so
+# (there is no auth module; see docs/security.md), so
 # there is nothing for a credentialed cross-origin request to steal today.
 # Still: an explicit allowlist, not "*", both because "*" + credentials is
 # a known-bad combination the moment auth is ever added, and because it's
 # no harder to configure correctly from the start. See
-# docs/RED_TEAM_REPORT.md CORS-01.
+# docs/security-findings.md CORS-01.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.get_cors_allowed_origins(),
@@ -79,7 +79,7 @@ async def health_check():
     mode = resolve_llm_mode()
     return {
         "status": "degraded" if mode == LLM_UNAVAILABLE else "ok",
-        "service": "AI World Intelligence Platform API",
+        "service": "AI Market News API",
         "llm_mode": mode,
         "llm_provider": "test" if mode == "test" else configured_llm_provider_name(),
         "test_runtime": is_test_runtime(),

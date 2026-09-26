@@ -47,6 +47,10 @@ RUN_LIVE_LLM_TESTS=1 python -m pytest -q -m live_openai
 - Real requests made during tests are recorded in a temporary per-run usage ledger, not in `backend/logs/`.
 - Never paste keys into test files, fixtures or logs. Fixture keys in the tests are short fake strings.
 
+### Live validation against stored articles
+
+`backend/validate_openai_live.py` runs the production OpenAI path over real articles in your local database, read-only, and reports how classification and summaries behave. It spends OpenAI quota, so run it deliberately and check `manage_sources.py llm-usage` afterwards. `validate_production_path.py` and `validate_source_registry.py` make no model requests.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request:

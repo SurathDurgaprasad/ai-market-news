@@ -211,7 +211,7 @@ describe('homepage', () => {
   it('shows an unavailable state, not a crash, when the API is down', async () => {
     mockFetch({ '/events': new Error('ECONNREFUSED') });
     const markup = html(await Home());
-    expect(markup).toContain('Intelligence API unavailable');
+    expect(markup).toContain('News service unavailable');
     expect(markup).toContain('API unreachable');
     expect(markup).not.toContain('>Live<');
   });
@@ -230,6 +230,17 @@ describe('event-not-found (proxy)', () => {
     const fetchMock = mockFetch({});
     const response = await proxy(request('not-a-uuid'));
     expect(response.headers.get('x-middleware-rewrite')).toContain('/_missing/event');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('answers an unknown player with a real 404, without calling the API', async () => {
+    const fetchMock = mockFetch({});
+    for (const slug of ['not-a-player', 'constructor']) {
+      const response = await proxy(new NextRequest(`http://localhost:3000/players/${slug}`));
+      expect(response.headers.get('x-middleware-rewrite')).toContain('/_missing/event');
+    }
+    const known = await proxy(new NextRequest('http://localhost:3000/players/openai'));
+    expect(known.headers.get('x-middleware-rewrite')).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

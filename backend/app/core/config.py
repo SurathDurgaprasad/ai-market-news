@@ -56,21 +56,16 @@ _hydrate_os_environ(
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "AI World Intelligence Platform"
+    PROJECT_NAME: str = "AI Market News"
     
     # Environment
     TEST_MODE: bool = False
     
     # SQLite is the product database. Do not point this at PostgreSQL.
     DATABASE_URL: str = "sqlite:///./ai_platform.db"
-    
-    # Redis / Celery — unused (see docs/ARCHITECTURE.md §6); kept as a
-    # config field only because nothing currently reads it, so removing it
-    # is harmless but also not required.
-    REDIS_URL: str = "redis://localhost:6379/0"
 
     # Comma-separated list of allowed CORS origins. No wildcard by
-    # default — see docs/RED_TEAM_REPORT.md CORS-01: allow_origins=["*"]
+    # default — see docs/security-findings.md CORS-01: allow_origins=["*"]
     # combined with allow_credentials=True was a known-bad combination.
     # Defaults to the frontend's local dev origins; override via env for
     # any other deployment target.

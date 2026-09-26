@@ -17,9 +17,9 @@ export default function Error({
   return (
     <main className="flex flex-1 items-center justify-center bg-canvas px-4 py-16 text-ink">
       <div className="max-w-md rounded-md border border-line bg-surface p-8 text-center" role="alert">
-        <h1 className="mb-2 text-xl font-semibold text-ink">This view could not be loaded</h1>
+        <h1 className="font-display mb-2 text-2xl font-semibold text-ink">This page could not be loaded</h1>
         <p className="mb-6 text-sm text-muted">
-          The intelligence API may be restarting. Your data is unaffected.
+          The news service may be restarting. Try again in a moment.
         </p>
         <div className="flex items-center justify-center gap-5">
           <button
@@ -30,7 +30,7 @@ export default function Error({
             Try again
           </button>
           <Link href="/" className="text-sm text-accent hover:underline">
-            Back to overview
+            Back to the homepage
           </Link>
         </div>
       </div>

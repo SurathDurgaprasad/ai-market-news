@@ -89,7 +89,7 @@ export async function generateMetadata({
   if (loaded.kind === 'ok') {
     return { title: loaded.event.headline, description: factualSummary(loaded.event.short_summary) || undefined };
   }
-  return { title: loaded.kind === 'missing' ? 'Event not found' : 'Event unavailable' };
+  return { title: loaded.kind === 'missing' ? 'Development not found' : 'Development unavailable' };
 }
 
 function changePoints(value?: string | null): string[] {
@@ -144,10 +144,10 @@ export default async function EventDetailPage({
     return (
       <main className="flex-1 bg-canvas text-ink">
         <div className="intel-shell py-16 text-center" role="alert">
-          <h1 className="mb-3 text-2xl font-semibold text-ink">Event temporarily unavailable</h1>
-          <p className="mb-8 text-muted">The intelligence API could not be reached. Try again shortly.</p>
+          <h1 className="font-display mb-3 text-[2rem] font-semibold text-ink">Development temporarily unavailable</h1>
+          <p className="mb-8 text-muted">The news service could not be reached. Try again shortly.</p>
           <Link href="/" className="text-accent hover:underline">
-            ← Back to overview
+            ← Back to the homepage
           </Link>
         </div>
       </main>

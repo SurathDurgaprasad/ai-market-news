@@ -208,7 +208,7 @@ def _read_body_with_cap(response: httpx.Response, max_bytes: int = MAX_RESPONSE_
     high compression ratio had already been fully expanded in memory
     (proven directly: a 48KB gzip payload decompressing to 50MB was
     accepted into memory before any size check ran). See
-    docs/RED_TEAM_REPORT.md INGEST-DECOMPRESSION-BOMB-01.
+    docs/security-findings.md INGEST-DECOMPRESSION-BOMB-01.
 
     Checking cumulative size per chunk during the read bounds this to,
     worst case, one chunk's decompression amplification rather than the
@@ -254,7 +254,7 @@ def fetch_url(
 
     current_url = url
     headers = {
-        "User-Agent": "AIWorldIntelligencePlatform/1.0 (feed-ingest)",
+        "User-Agent": "AIMarketNews/0.1 (+https://github.com/SurathDurgaprasad/AI-Market-News)",
         "Accept": accept or "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
     }
 
