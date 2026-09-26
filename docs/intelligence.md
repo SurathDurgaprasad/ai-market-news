@@ -60,7 +60,7 @@ Each event is placed in at most one area: **Models, Agents, Coding, Research, Se
 1. Security language in the headline (malware, vulnerability, ...).
 2. A specific stored kind: `model_release` → Models, `funding` → Funding, `research` → Research, and so on. A `security_incident` kind needs security language in the headline or summary to count.
 3. For generic kinds (capability, tool update, other), the classifier's `market_category`, accepted only when it is exactly one of the areas. It never assigns Security on its own.
-4. Headline rules, then unambiguous product names (Codex → Coding, vLLM → Infrastructure, AlphaFold → Research, versioned model families → Models).
+4. Personnel moves (resigns, appoints, hires, steps down) stop here: a word such as "research" in their headline does not categorize them. Otherwise, headline rules, then unambiguous product names (Codex → Coding, vLLM → Infrastructure, AlphaFold → Research, versioned model families → Models).
 
 Anything left over stays uncategorized. Conference promotions, culture pieces and general business news are not forced into an area.
 

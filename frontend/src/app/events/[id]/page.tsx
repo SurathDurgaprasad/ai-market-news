@@ -187,7 +187,9 @@ export default async function EventDetailPage({
     : [];
   const linked = Array.isArray(event.linked_articles) ? event.linked_articles : [];
   const supporting = linked.filter((article) => article.link_type !== 'primary');
-  const publishers = new Set(linked.map((article) => article.source_name).filter(Boolean));
+  // The primary article's publisher is the displayed source, not the feed it
+  // was found through (Hacker News is a route, not another publisher).
+  const publishers = new Set(supporting.map((article) => article.source_name).filter(Boolean));
   if (source?.name) publishers.add(source.name);
   const related = Array.isArray(event.related) ? event.related : [];
   const ingest = event.ingest_source;
@@ -363,7 +365,11 @@ export default async function EventDetailPage({
                     <li key={item.id} className="group relative border-b border-line py-3.5 last:border-b-0">
                       <p className="flex flex-wrap items-center gap-x-2 text-[12px] text-muted">
                         <CategoryTag category={item.category} />
-                        <span>{[item.reason, formatUtcWhen(item.event_time)].filter(Boolean).join(' · ')}</span>
+                        <span>
+                          {[item.reason === item.category ? '' : item.reason, formatUtcWhen(item.event_time)]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
                       </p>
                       <Link
                         href={`/events/${item.id}`}

@@ -71,6 +71,13 @@ _HEADLINE_POLICY = re.compile(
 )
 _HEADLINE_MODEL = re.compile(r"\b(large language model|foundation model|llm|gpt-\d)\b", re.I)
 _HEADLINE_RESEARCH = re.compile(r"\bresearch\b", re.I)
+# A personnel move names a person, not a market area: "Resigns from Google to
+# focus on AI research" is not Research. Only the classifier may categorize it.
+_HEADLINE_PERSONNEL = re.compile(
+    r"\b(resign\w*|steps? down|stepping down|departs|departure|exits|poach\w*|hires|hired|appoint\w*|"
+    r"named (?:as )?(?:its )?(?:new )?(?:ceo|cto|cfo|chief|head|president))\b",
+    re.I,
+)
 _HEADLINE_ASSISTANT = re.compile(r"\b(ai assistant|ai bots?|chatbots?)\b", re.I)
 _SUBSTANCE = {
     "model_release": 3,
@@ -234,6 +241,8 @@ def market_category(event: MarketEvent) -> Optional[str]:
     classified = normalize_market_category(event.classified_category)
     if classified and classified != "Security":
         return classified
+    if _HEADLINE_PERSONNEL.search(headline):
+        return None
     if _HEADLINE_POLICY.search(headline):
         return "Policy"
     for label, pattern in _CATEGORY_RULES:

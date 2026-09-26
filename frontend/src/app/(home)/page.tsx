@@ -141,7 +141,7 @@ export default async function Home() {
               {' · '}repeated coverage counts once · times in UTC
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 md:ml-auto">
             {latestCreated ? <NewEventsNotifier latestEventTimestamp={latestCreated} /> : null}
             {status ? (
               <div className="min-w-0 max-w-[46ch] md:text-right" role="status">
@@ -149,7 +149,7 @@ export default async function Home() {
                   <span className={`h-2 w-2 rounded-full ${STATE_CLASS[status.state].dot}`} aria-hidden="true" />
                   {status.label}
                 </p>
-                {status.detail ? <p className="mt-0.5 text-[12px] leading-snug text-muted">{status.detail}</p> : null}
+                {status.detail ? <p className="mt-0.5 text-[12px] leading-snug text-muted text-balance">{status.detail}</p> : null}
                 {failing > 0 ? (
                   <p className="mt-0.5 text-[12px] text-muted">
                     <Link href="/admin/sources" className="underline decoration-line underline-offset-2 hover:text-ink">

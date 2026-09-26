@@ -21,6 +21,7 @@ import { formatUtcCardTime, hasClockTime } from '@/lib/time';
 import { proxy } from '@/proxy';
 import Home from '@/app/(home)/page';
 import PlayerPage from '@/app/players/[slug]/page';
+import EventDetailPage from '@/app/events/[id]/page';
 
 const html = (node: ReactElement) => renderToStaticMarkup(node);
 
@@ -276,6 +277,43 @@ describe('player page', () => {
     await expect(PlayerPage({ params: Promise.resolve({ slug: 'not-a-player' }) })).rejects.toThrow(
       'NEXT_NOT_FOUND',
     );
+  });
+});
+
+describe('event page', () => {
+  const DETAIL = {
+    id: '85ca2e65-e46c-4a87-b641-a324546f2060',
+    headline: 'AI Agents Attempted to Hack Three Public Data Sources',
+    short_summary: 'Agents probed three public data providers.',
+    importance_score: 75,
+    created_at: '2026-09-24T14:05:00Z',
+    event_time: '2026-09-24T05:21:00Z',
+    primary_source: { name: 'Transluce', url: 'https://transluce.org/rogue-agents', tier: 'origin' },
+    ingest_source: { name: 'Hacker News', url: 'https://news.ycombinator.com/rss', tier: 'discussion' },
+    article_url: 'https://transluce.org/rogue-agents',
+    linked_articles: [
+      { title: 'Rogue agents', url: 'https://transluce.org/rogue-agents', source_name: 'Hacker News', link_type: 'primary' },
+      { title: 'Australia to investigate', url: 'https://techcrunch.com/x', source_name: 'TechCrunch AI', link_type: 'supporting' },
+    ],
+    related: [
+      { id: 'a1b2c3d4-0000-4000-8000-000000000001', headline: 'Another breach', category: 'Security', reason: 'Security' },
+      { id: 'a1b2c3d4-0000-4000-8000-000000000002', headline: 'OpenAI story', category: 'Security', reason: 'OpenAI' },
+    ],
+  };
+
+  it('counts the discovery feed as a route, not another publisher', async () => {
+    mockFetch({ [`/events/${DETAIL.id}`]: { body: DETAIL } });
+    const markup = html(await EventDetailPage({ params: Promise.resolve({ id: DETAIL.id }) }));
+    expect(markup).toContain('2 publishers');
+    expect(markup).not.toContain('3 publishers');
+  });
+
+  it('does not repeat the category as the reason a development is related', async () => {
+    mockFetch({ [`/events/${DETAIL.id}`]: { body: DETAIL } });
+    const markup = html(await EventDetailPage({ params: Promise.resolve({ id: DETAIL.id }) }));
+    const text = markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).not.toMatch(/Security Security/i);
+    expect(text).toContain('OpenAI');
   });
 });
 

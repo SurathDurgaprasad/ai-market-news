@@ -66,6 +66,18 @@ def test_a_specific_kind_still_wins_and_nothing_is_invented():
     assert market_category(_event("Gen Alpha slang", "other", "Product Launch")) is None
 
 
+def test_personnel_moves_are_not_categorized_by_headline_words():
+    """Live: a resignation "to focus on ... AI Research" was shown as Research."""
+    headline = "Robert O'Callahan Resigns from Google, Plans to Focus on Debugging Tools and AI Research Independently"
+    assert market_category(_event(headline)) is None
+    assert market_category(_event("OpenAI appoints Dali Rajic as Chief Revenue Officer")) is None
+    # The classifier's taxonomy answer and security language still apply.
+    assert market_category(_event("Lab hires ex-Google team for agent research", "other", "Agents")) == "Agents"
+    assert market_category(_event("CISO resigns after ransomware attack on AI lab")) == "Security"
+    # Ordinary headline rules are unchanged.
+    assert market_category(_event("Lab publishes new research on reasoning")) == "Research"
+
+
 def test_security_from_the_classifier_still_needs_security_language():
     assert market_category(_event("Meta removes critical video about its AI Glasses", "other", "Security")) is None
 
