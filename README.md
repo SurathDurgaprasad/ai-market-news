@@ -90,6 +90,20 @@ Open http://localhost:3000. API health: http://127.0.0.1:8000/api/health.
 
 The API creates the SQLite database on first start and the scheduler begins polling due sources. Developments appear as articles are enriched, usually within a few minutes. Without a provider key the site still runs and says so, but no new developments are created.
 
+## Configuration
+
+The backend reads environment variables or an untracked `backend/.env` (start from `backend/.env.example`). The ones most people change:
+
+| Variable | Default | |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` | Which provider enriches new articles |
+| `DATABASE_URL` | `sqlite:///./ai_platform.db` | SQLite file location |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Frontend origins allowed to call the API |
+| `SCHEDULER_ENABLED` | on | `0` serves stored data without polling sources |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | API address, in `frontend/.env.local` |
+
+Every setting is described in [docs/configuration.md](docs/configuration.md).
+
 ## Everyday commands
 
 | Task | Command (from `backend/` unless noted) |
@@ -105,7 +119,7 @@ The API creates the SQLite database on first start and the scheduler begins poll
 
 | | |
 |---|---|
-| [Getting started](docs/getting-started.md) | Setup, demo data, first ingestion |
+| [Getting started](docs/getting-started.md) | Setup and first ingestion |
 | [Architecture](docs/architecture.md) | Components, data model, request flow |
 | [Configuration](docs/configuration.md) | Every environment variable |
 | [Ingestion](docs/ingestion.md) | Scheduling, fetching, deduplication, outages |
@@ -116,6 +130,19 @@ The API creates the SQLite database on first start and the scheduler begins poll
 | [Deployment](docs/deployment.md) | Running in production, Docker |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems |
 | [Contributing](docs/contributing.md) | How to contribute |
+
+## Known limitations
+
+- Sources are public RSS/Atom feeds and the article pages they link to; there is no general crawler, and paywalled text is not read.
+- Creating new developments needs a language-model provider. Without one, the site serves what is already stored.
+- One API process with SQLite: suited to a single server, not horizontal scaling.
+- There is no authentication. The API is read-only; deploy it where only the frontend and operators can reach it if that matters to you.
+- Developments stored before the classifier returned a market area can stay uncategorized until `manage_sources.py backfill-categories` is run (it estimates cost first).
+- The frontend is not containerized; `docker-compose.yml` runs the backend only.
+
+## Contributing
+
+Issues and focused pull requests are welcome; start with [docs/contributing.md](docs/contributing.md). Tests run without any API key.
 
 ## Security
 
